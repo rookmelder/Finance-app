@@ -2,3 +2,4 @@
 .worker/
 SETUP.md
 __pycache__/
+.obsidian
