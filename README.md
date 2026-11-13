@@ -43,7 +43,7 @@ is trusted until Claude has checked it.
 | **Harness** | The program that lets a model actually *do* things on your PC: open and write files, run checks. We use **agy** (Google's Antigravity CLI) and **Copilot CLI** (GitHub). It asks the model what it wants to do, checks if that's allowed, and does it. |
 | **Role** | A job description for a worker: what it does, which models may do it, and its rules. |
 | **Pack** | A ready-made set of roles and advice for one kind of project. |
-| **`agent/delegate.ps1`** | The one script that sends a job to a worker: picks the model, adds the rules, runs it safely, reports back. |
+| **`agent/delegate.py`** | The one script that sends a job to a worker: picks the model, adds the rules, runs it safely, reports back. |
 
 ## Roles
 
@@ -89,7 +89,7 @@ Each pack says what a good goal should cover, how to check the work, how to spli
 ## What happens when Claude hands out a job
 
 1. Claude writes a short task: the goal, which files, the exact spec, what must be covered.
-2. `delegate.ps1` adds the role's rules and the notes from `PROJECT.md`, and pastes in the files the worker needs.
+2. `delegate.py` adds the role's rules and the notes from `PROJECT.md`, and pastes in the files the worker needs.
 3. It starts the worker with **only the tools its role allows**, inside a **sandbox**: it can't touch anything outside
    the project, can't use git, can't browse the web. The only command it may run is the project's check command.
 4. The worker does its piece, checks it, and ends with a short report.
@@ -115,10 +115,10 @@ Each pack says what a good goal should cover, how to check the work, how to spli
 | OpenAI | Small prepaid credit | Free daily tokens with data sharing on: 250k (big models), 2.5M (small) |
 | Ollama | Free, on your PC | Unlimited, but slow on small GPUs |
 
-- **OpenAI guard:** `delegate.ps1` refuses models that would bill your credit, and stops at 90% of the free daily
+- **OpenAI guard:** `delegate.py` refuses models that would bill your credit, and stops at 90% of the free daily
   tokens, also in the middle of a job. Its count is an estimate; OpenAI's usage page is the real number.
 - **Privacy:** the free tiers of NVIDIA, Gemini API, OpenRouter and OpenAI may read or train on what you send.
-  Mark a project private in `PROJECT.md` and `delegate.ps1` only uses agy (or Ollama); Claude does the rest.
+  Mark a project private in `PROJECT.md` and `delegate.py` only uses agy (or Ollama); Claude does the rest.
 
 ## Keeping tokens (and so cost and speed) down
 
@@ -132,11 +132,11 @@ run their own check. On a test job this saved 38-59% of the tokens at the same q
 |---|---|
 | `GOAL.md` | **You write this:** what you want. |
 | `PROJECT.md` | Claude fills this in: settings and notes for this project. |
-| `SETUP.md` | Made by `agent/check-setup.ps1`: what works on your PC (not committed). |
+| `SETUP.md` | Made by `agent/check_setup.py`: what works on your PC (not committed). |
 | `CLAUDE.md` | The rulebook Claude reads at the start of every session. |
 | `agent/roles/` | The roles in use in this project. |
 | `agent/bases/` | The core rules for each base type. |
-| `agent/delegate.ps1` | Runs a worker. `agent/check-setup.ps1` checks your setup. |
+| `agent/delegate.py` | Runs a worker. `agent/check_setup.py` checks your setup. |
 | `agent/MODELS.md` | Every model: cost, limits, rating, pick order. |
 | `agent/NOTES.md` | Measurements and lessons learned (starts empty). |
 | `agent/setup/` | How to install each tool and get each key. |
@@ -148,11 +148,11 @@ run their own check. On a test job this saved 38-59% of the tokens at the same q
 ## Running a worker yourself
 
 ```bash
-powershell -NoProfile -File agent/delegate.ps1 -Role builder -TaskFile .worker/t1.md -Include src/shop.py
+python agent/delegate.py --role builder --task-file .worker/t1.md --include src/shop.py
 ```
 
-- `-Role` picks the role (any file in `agent/roles/`). `-Include` pastes files into the task.
-- `-Model` (an agy model) or `-Provider` + `-ProviderModel` force one specific worker. `-Local` uses Ollama.
+- `--role` picks the role (any file in `agent/roles/`). `--include` pastes files into the task.
+- `--model` (an agy model) or `--provider` + `--provider-model` force one specific worker. `--local` uses Ollama.
 - Result codes: 0 OK, 2 unknown role or no task, 3 took too long, 4 tried something forbidden, 5 empty answer,
   6 provider problem or no worker available.
 

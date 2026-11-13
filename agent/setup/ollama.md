@@ -4,4 +4,4 @@ Gives you: a model that runs on your own PC, so private work never leaves it. Sl
 (the Lead writes the files it suggests).
 
 1. Install from ollama.com, then pull a model: `ollama pull gemma4:12b` (8 GB VRAM: works but slow).
-2. Use it with `-Local` (and `-LocalModel <name>` for another model).
+2. Use it with `--local` (and `--local-model <name>` for another model).

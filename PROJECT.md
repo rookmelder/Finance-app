@@ -1,7 +1,7 @@
 # Project
 
 <!-- Filled in by the Lead (Claude) from GOAL.md and a project pack (templates/packs/), with the user's OK.
-     delegate.ps1 reads the "settings" block and pastes "Worker notes" into every worker's task. -->
+     delegate.py reads the "settings" block and pastes "Worker notes" into every worker's task. -->
 
 **Status:** NOT FILLED IN YET
 
@@ -13,7 +13,7 @@
 - **Roles in use:** <e.g. builder, tester, reviewer, scribe, designer>
 - **Done means (first version):** <from GOAL.md>
 
-## Settings (read by delegate.ps1)
+## Settings (read by delegate.py)
 Leave a value empty when it doesn't apply. `{name}` stands for the part a worker works on (the Lead names it in the task: "Your part: shop").
 
 ```settings

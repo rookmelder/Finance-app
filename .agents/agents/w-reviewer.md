@@ -1,6 +1,6 @@
 ---
 name: w-reviewer
-description: Reviewer worker: read-only checklist review. Used by delegate.ps1 only; role rules arrive in the user message.
+description: Reviewer worker: read-only checklist review. Used by delegate.py only; role rules arrive in the user message.
 mainAgent: true
 subagent: false
 tools: [view_file, list_dir, grep_search, find_by_name, run_command, command_status]

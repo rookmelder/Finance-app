@@ -1,6 +1,6 @@
 ---
 name: w-scribe
-description: Scribe worker: writes docs from facts in code. Used by delegate.ps1 only; role rules arrive in the user message.
+description: Scribe worker: writes docs from facts in code. Used by delegate.py only; role rules arrive in the user message.
 mainAgent: true
 subagent: false
 tools: [view_file, list_dir, grep_search, find_by_name, replace_file_content, write_to_file]
