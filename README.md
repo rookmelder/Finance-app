@@ -1,14 +1,35 @@
-# The agent setup, in plain words
+# Multi-Agent: a template for working with an AI team
 
-Status: 2026-11-13. This explains how the AI team in this folder works. (The Depths game is just
-the project the team practises on; it is not explained here.)
+Status: 2026-11-13. A starting folder for any project (code, writing, data, research) where Claude leads
+and cheaper AI models do the work. Clone it for each new project.
 
 ## The idea in one paragraph
 
 Claude (in Claude Code) is the **boss**. It is smart but expensive, so it does the thinking: plan the
-work, write exact instructions, check every result, run all the tests, and save the work in git.
-The actual typing of code is handed to **cheap or free AI models** ("workers"). Workers are fast but make
-mistakes, so nothing they do is trusted until Claude has checked it.
+work, write exact instructions, check every result, and save the work in git.
+The actual making (code, text, data) is handed to **cheap or free AI models** ("workers"). Workers are fast
+but make mistakes, so nothing they do is trusted until Claude has checked it.
+
+## Starting a new project with this template
+
+1. Make an empty repo on GitHub for the new project, then:
+   ```bash
+   git clone https://github.com/rookmelder/Multi-Agent.git my-project
+   ```
+   ```bash
+   cd my-project
+   ```
+   ```bash
+   git remote set-url origin https://github.com/<you>/my-project.git
+   ```
+2. Copy `.env.example` to `.env` and fill in your API keys (never committed).
+3. Open the folder in Claude Code and tell it what you want to make. Claude sees that `PROJECT.md`
+   isn't filled in yet, asks you a few questions, and fills it in: what the project is, whether it's
+   private, and how to check the work (for code: the test commands).
+4. Put the project's files inside this folder (e.g. `src/`, `docs/`). Then just ask Claude for work.
+
+**What you need installed:** git, PowerShell, agy (Google Antigravity CLI, with a Google AI Pro plan),
+GitHub Copilot CLI, and optionally Ollama for private work.
 
 ## The pieces
 
@@ -30,12 +51,12 @@ automatically tries the next one.
 
 | Role | Job | 1st choice | 2nd | 3rd |
 |---|---|---|---|---|
-| **Builder** | Write one piece of code + its tests | Gemini 3.8 Flash Low (agy) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
+| **Builder** | Make one piece from a spec: code + its tests, a text section, a data file | Gemini 3.8 Flash Low (agy) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
 | **Builder+** | Bigger or trickier changes over several files | Gemini 3.8 Flash Medium (agy) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
-| **Tester** | Write extra tests for code it did *not* write | Gemini Flash-Lite (Gemini API) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
-| **Reviewer** | Read a change and look for bugs (never edits) | Claude Sonnet 4.6 (agy) | o3 (OpenAI, free tokens) | gpt-oss-120b (agy) |
+| **Tester** | Write tests/checks for work it did *not* make | Gemini Flash-Lite (Gemini API) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
+| **Reviewer** | Read a change and look for mistakes (never edits) | Claude Sonnet 4.6 (agy) | o3 (OpenAI, free tokens) | gpt-oss-120b (agy) |
 | **Scribe** | Write docs like README (only `.md` files) | Nemotron Lightning (NVIDIA) | Gemini 3.8 Flash Low (agy) | Nemotron Ultra (OpenRouter, free) |
-| **Private** | Code that must never leave this PC | Gemma 4 on this PC (Ollama, slow, text only) | Claude does it itself | |
+| **Private** | Work that must never leave this PC | Gemma 4 on this PC (Ollama, slow, text only) | Claude does it itself | |
 
 Why this order: quality first, then free before paid, then speed. All of it is free or already paid for
 (your subscriptions). The full list of every model, with ratings, is in `MODELS.md`.
@@ -48,15 +69,16 @@ a way the safety sandbox blocks, and one got stuck in a loop. Reviewing only nee
 
 ## What happens when Claude hands out a job
 
-1. Claude writes a short task: the goal, which files, the exact spec, what the tests must cover.
-2. `delegate.ps1` glues the **role rules** (`roles/builder.md` etc.) in front of it, and pastes in any
-   files the worker needs (so it doesn't waste steps opening them).
+1. Claude writes a short task: the goal, which files, the exact spec, what must be covered.
+2. `delegate.ps1` glues the **role rules** (`roles/builder.md` etc.) and the **project notes** from
+   `PROJECT.md` in front of it, and pastes in any files the worker needs (so it doesn't waste steps opening them).
 3. It starts the worker with **only the tools that role needs** (a reviewer can't write, a scribe can only
    write `.md` files) inside a **sandbox** (it can't touch things outside this project, can't use git,
-   can't browse the web).
-4. The worker writes code, runs only its own tests, and ends with a 4-line report:
-   what it changed, what it did, test results, what it was unsure about.
-5. Claude checks: did it only touch the allowed files? Does the **whole** test suite pass? Is the code right?
+   can't browse the web). The only command a worker may run is the project's check command from
+   `PROJECT.md`; projects without one (writing, research) get no commands at all.
+4. The worker does its piece, checks it, and ends with a 4-line report:
+   what it changed, what it did, how it checked, what it was unsure about.
+5. Claude checks: did it only touch the allowed files? Does the **full** check pass? Is the work right?
    Then Claude fixes, asks a reviewer, and commits.
 
 ## How big jobs are split
@@ -103,7 +125,7 @@ So we keep each step small:
 - Needed files are pasted in up front, so the worker doesn't spend steps opening them.
 - Workers run only their own tests, not the whole suite.
 
-Measured on the same job (adding a shop module, checked with hidden tests), before vs after:
+Measured on the same coding job (checked with hidden tests), before vs after these savings:
 - agy Gemini Flash Low: same quality (2/2 correct), **38% fewer tokens**.
 - NVIDIA Mistral: same quality (2/2 correct), **59% fewer tokens**, about 35% faster, no more timeouts.
 
@@ -112,9 +134,10 @@ Measured on the same job (adding a shop module, checked with hidden tests), befo
 | File / folder | What it is |
 |---|---|
 | `CLAUDE.md` | The rulebook Claude reads at the start of every session. |
+| `PROJECT.md` | The one file you change per project: what it is, how to check the work, notes for workers. |
 | `README.md` | This explanation. |
 | `MODELS.md` | Every model you can use: cost, limits, rating, and the pick order per role. |
-| `NOTES.md` | History: measurements, benchmarks, lessons learned. |
+| `NOTES.md` | Measurements and lessons learned (starts empty; rules at the top). |
 | `delegate.ps1` | The script that runs a worker. |
 | `roles/*.md` | The short rules each kind of worker gets. |
 | `.agents/agents/w-*.md` | Trimmed tool sets for agy workers. Your own agy chats are not affected. |
@@ -125,14 +148,14 @@ Measured on the same job (adding a shop module, checked with hidden tests), befo
 ## Running a worker yourself
 
 ```bash
-powershell -NoProfile -File delegate.ps1 -Role builder -TaskFile .worker/t1.md -Include depths/items.py
+powershell -NoProfile -File delegate.ps1 -Role builder -TaskFile .worker/t1.md -Include src/shop.py
 ```
 
 - `-Role` picks the job: builder, builderplus, tester, reviewer, scribe.
 - `-Include` pastes files into the task.
 - `-Model` (an agy model) or `-Provider` + `-ProviderModel` force one specific worker (no fallback).
 - `-Local` uses Ollama on this PC (private).
-- Result codes: 0 OK, 3 took too long, 4 tried something forbidden, 5 empty answer, 6 provider problem.
+- Result codes: 0 OK, 2 no task given, 3 took too long, 4 tried something forbidden, 5 empty answer, 6 provider problem.
 
 ## Known weak spots
 

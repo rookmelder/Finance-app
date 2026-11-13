@@ -3,7 +3,7 @@
   Send one task to a worker (agy, Copilot+cloud API, or local Ollama) by role, with safe defaults.
 
 .EXAMPLES
-  powershell -NoProfile -File delegate.ps1 -Role builder -TaskFile .worker/t1.md -Include depths/items.py
+  powershell -NoProfile -File delegate.ps1 -Role builder -TaskFile .worker/t1.md -Include src/shop.py
   powershell -NoProfile -File delegate.ps1 -Role reviewer -TaskFile .worker/review.md
   powershell -NoProfile -File delegate.ps1 -Role builder -Provider nvidia -TaskFile .worker/t1.md   # force one worker
   powershell -NoProfile -File delegate.ps1 -Local -TaskFile .worker/t1.md                         # private, text only
@@ -12,7 +12,8 @@
   Each role has a worker chain; on a transient provider error (429/503/no capacity) it retries
   once, then moves to the next worker. -Model / -Provider pick one worker (no fallback chain).
   Output: a short summary (full JSON saved in .worker/last.json); -Json prints the JSON instead.
-  Exit: 0 ok, 3 timeout (check git status: files often exist), 4 blocked, 5 empty, 6 provider error.
+  Exit: 0 ok, 2 no task, 3 timeout (check git status: files often exist), 4 blocked, 5 empty, 6 provider error.
+  Project settings (check commands, worker notes) come from PROJECT.md.
 #>
 param(
     [string]$Task,
@@ -37,6 +38,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
+New-Item -ItemType Directory -Force (Join-Path $root '.worker') | Out-Null   # git-ignored, so missing in a fresh clone
 
 # API keys: real environment variables win; otherwise read KEY=VALUE lines from .env (process only).
 $envFile = Join-Path $root '.env'
@@ -47,6 +49,19 @@ if (Test-Path $envFile) {
         }
     }
 }
+
+# Project settings from PROJECT.md: the ```settings block (key: value) and the "## Worker notes" section.
+$proj = @{ check_one = ''; check_all = ''; check_dir = '' }; $workerNotes = ''
+$projFile = Join-Path $root 'PROJECT.md'
+if (Test-Path $projFile) {
+    $pt = Get-Content -Raw -Encoding UTF8 $projFile
+    if ($pt -match '(?s)```settings\s*\r?\n(.*?)```') {
+        foreach ($l in $Matches[1] -split '\r?\n') { if ($l -match '^\s*(\w+)\s*:\s*(.*?)\s*$') { $proj[$Matches[1]] = $Matches[2].Trim('`') } }
+    }
+    if ($pt -match '(?s)## Worker notes[^\n]*\n(.*?)(?=\n## |\z)') { $workerNotes = $Matches[1].Trim() }
+    if ($workerNotes -match '^- <') { $workerNotes = '' }   # template placeholder, not filled in
+}
+$checkStem = if ($proj.check_one) { ($proj.check_one -split '\s+')[0] } else { '' }   # Copilot matches the command's first word only
 
 # --- Workers per role (first = main, rest = fallbacks) --------------------------------
 # Order = MODELS.md pick order, minus models that failed for that job (OpenAI writes files via the
@@ -68,11 +83,15 @@ $providers = @{
     openai     = @{ url = 'https://api.openai.com/v1'; key = 'OPENAI_API_KEY'; model = 'gpt-5.4-mini' }
 }
 # Copilot tools per role: only what the role needs (each tool definition is resent on every call).
+# No check command in PROJECT.md = no shell tool at all.
+$sh = if ($checkStem) { @("shell(${checkStem}:*)") } else { @() }
+$shTools = if ($checkStem) { ',powershell,read_powershell' } else { '' }
+$testerWrite = if ($proj.check_dir) { "write($($proj.check_dir)/**)" } else { 'write' }
 $cpTools = @{
-    builder  = @{ tools = 'view,create,edit,grep,glob,powershell,read_powershell'; allow = @('write', 'shell(python:*)') }
-    tester   = @{ tools = 'view,create,edit,grep,glob,powershell,read_powershell'; allow = @('write(tests/**)', 'shell(python:*)') }
+    builder  = @{ tools = "view,create,edit,grep,glob$shTools"; allow = @('write') + $sh }
+    tester   = @{ tools = "view,create,edit,grep,glob$shTools"; allow = @($testerWrite) + $sh }
     scribe   = @{ tools = 'view,create,edit,grep,glob'; allow = @('write(**/*.md)') }
-    reviewer = @{ tools = 'view,grep,glob,powershell,read_powershell'; allow = @('shell(python:*)') }
+    reviewer = @{ tools = "view,grep,glob$shTools"; allow = $sh }
 }
 $cpRole = @{ builder = 'builder'; builderplus = 'builder'; tester = 'tester'; reviewer = 'reviewer'; scribe = 'scribe' }[$Role]
 
@@ -86,7 +105,11 @@ if ($TaskFile) { $Task = Get-Content -Raw -Encoding UTF8 $TaskFile }
 if (-not $Task) { Write-Error 'Give -Task "..." or -TaskFile <path>.'; exit 2 }
 if (-not $Conversation) {
     $rules = Get-Content -Raw -Encoding UTF8 (Join-Path $root "roles\$roleFile.md")
-    $Task = $rules + "`n---`n# YOUR TASK`n`n" + $Task
+    $check = if ($Role -eq 'scribe') { 'Run no commands.' }
+             elseif ($proj.check_one) { "Check command (the ONLY command you may run, for your own part; {name} = your part): ``$($proj.check_one)``" }
+             else { 'This project has no check command: run no commands. Re-read your files against the spec instead.' }
+    $notes = if ($workerNotes) { "`n$workerNotes" } else { '' }
+    $Task = $rules + "`n---`n# PROJECT`n$check$notes`n`n---`n# YOUR TASK`n`n" + $Task
 }
 foreach ($f in $Include) {
     $n = 0; $body = (Get-Content -Encoding UTF8 $f | ForEach-Object { $n++; "{0,4}  {1}" -f $n, $_ }) -join "`n"
@@ -103,14 +126,15 @@ if ($Local) {
 }
 
 function Get-Changes {
-    @(git -C $root status --porcelain 2>$null | Where-Object { $_ -notmatch '__pycache__|\.worker/' })
+    @(git -C $root status --porcelain -uall 2>$null | Where-Object { $_ -notmatch '__pycache__|\.worker/' })
 }
 
 # --- One attempt on agy ------------------------------------------------------------------
 function Invoke-Agy($w) {
     $prompt = $Task
     if ($Role -in 'builder', 'builderplus', 'tester') {
-        $prompt += "`n`nREMINDER: only command allowed: 'python -m unittest tests.test_<name> -v' for your own test module (never discover). Run tests max 2x. End with the report."
+        $prompt += if ($proj.check_one) { "`n`nREMINDER: only command allowed: '$($proj.check_one)' for your own part. Run it max 2x. End with the report." }
+                   else { "`n`nREMINDER: run no commands. End with the report." }
     }
     $a = @('--input-format', 'stream-json', '--output-format', 'stream-json', '--model', $w.m, '--print-timeout', "${TimeoutSec}s", '--mode', 'accept-edits')
     if (-not $NoAgent) { $a += @('--agent', "w-$cpRole") }
