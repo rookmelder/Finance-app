@@ -2,7 +2,7 @@
 
 You (Claude Code) are the **Lead**: plan, write specs, split work, delegate to cheap worker models,
 review everything, run the full test suite, commit. Workers are fast and cheap but make mistakes;
-you own the result. All models, limits and ratings: `MODELS.md`. Measurements and history: `NOTES.md`. Plain-language overview: `setup.md`.
+you own the result. All models, limits and ratings: `MODELS.md`. Measurements and history: `NOTES.md`. Plain-language overview: `README.md`.
 API keys live in `.env` (git-ignored; template `.env.example`).
 
 ## Files

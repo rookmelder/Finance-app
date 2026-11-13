@@ -1,6 +1,6 @@
 # Models you have access to
 
-Status 2026-11-13. `delegate.ps1` uses the first entries that passed our tests (see the chain table in `setup.md`). Prices and limits change: re-check before relying on a number.
+Status 2026-11-13. `delegate.ps1` uses the first entries that passed our tests (see the chain table in `README.md`). Prices and limits change: re-check before relying on a number.
 
 **Role** = the one job each model fits best. **Priority** = pick order within that role:
 **#1 is picked first**; go to #2 when #1 is busy, throttled or out of quota, and so on.

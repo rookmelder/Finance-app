@@ -112,7 +112,7 @@ Measured on the same job (adding a shop module, checked with hidden tests), befo
 | File / folder | What it is |
 |---|---|
 | `CLAUDE.md` | The rulebook Claude reads at the start of every session. |
-| `setup.md` | This explanation. |
+| `README.md` | This explanation. |
 | `MODELS.md` | Every model you can use: cost, limits, rating, and the pick order per role. |
 | `NOTES.md` | History: measurements, benchmarks, lessons learned. |
 | `delegate.ps1` | The script that runs a worker. |
