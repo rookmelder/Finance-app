@@ -92,7 +92,12 @@ $availBlock
 - OpenRouter credits ever bought >= `$10 (1000 instead of 50 free requests/day): <yes/no/no key>
 - Private project allowed on free cloud tiers: see PROJECT.md
 "@
-[IO.File]::WriteAllText((Join-Path $root 'SETUP.md'), $md.Replace("`r`n", "`n"), (New-Object Text.UTF8Encoding $false))
+$setupPath = Join-Path $root 'SETUP.md'
+# Keep the user's answers from a previous run (only the detected part is refreshed).
+if ((Test-Path $setupPath) -and ((Get-Content -Raw -Encoding UTF8 $setupPath) -match '(?s)(## Confirmed by the user.*)$')) {
+    $md = ($md -replace '(?s)## Confirmed by the user.*$', '') + $Matches[1].TrimEnd() + "`n"
+}
+[IO.File]::WriteAllText($setupPath, $md.Replace("`r`n", "`n"), (New-Object Text.UTF8Encoding $false))
 $rows | Format-Table -AutoSize | Out-String -Width 200
 "Available: " + (($avail.Keys | Where-Object { $avail[$_] }) -join ', ')
 "Written: SETUP.md"
