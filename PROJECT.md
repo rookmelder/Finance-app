@@ -1,16 +1,17 @@
 # Project
 
-<!-- Fill this file in at the start of every new project (the Lead asks the user if anything is unclear).
+<!-- Filled in by the Lead (Claude) from GOAL.md and a project pack (templates/packs/), with the user's OK.
      delegate.ps1 reads the "settings" block and pastes "Worker notes" into every worker's task. -->
 
 **Status:** NOT FILLED IN YET
 
 ## About (for the Lead)
-- **What we are making:** <one or two sentences>
-- **Kind of work:** <code / writing / data / research / mixed>
+- **In one sentence:** <what we are making, from GOAL.md>
+- **Pack(s) used:** <software / game / research / automation / none>
 - **Private?** <yes: only Claude, agy or Ollama may see the files / no: free cloud workers allowed>
-- **Where the work lives:** <e.g. `src/`, `docs/`, `data/`> (always inside this folder)
-- **Done means:** <how we know it works: tests pass, document reviewed, ...>
+- **Where the work lives:** <e.g. `src/`, `docs/`, `design/`> (always inside this folder)
+- **Roles in use:** <e.g. builder, tester, reviewer, scribe, designer>
+- **Done means (first version):** <from GOAL.md>
 
 ## Settings (read by delegate.ps1)
 Leave a value empty when it doesn't apply. `{name}` stands for the part a worker works on (the Lead names it in the task: "Your part: shop").
@@ -24,14 +25,7 @@ check_dir:
 - `check_one`: the ONLY command a worker may run, to check its own part. Empty = workers run no commands.
 - `check_all`: the full check the Lead runs after every worker (all tests, a build, a linter). Empty = Lead reviews by reading.
 - `check_dir`: the only folder a tester may write in. Empty = only the files its task names.
-
-Examples:
-
-| Project | check_one | check_all | check_dir |
-|---|---|---|---|
-| Python | `python -m unittest tests.test_{name} -v` | `python -m unittest discover -s tests` | `tests` |
-| Node | `npx vitest run tests/{name}.test.js` | `npx vitest run` | `tests` |
-| Writing / docs / research | (empty) | (empty) | (empty) |
+- Examples per kind of project: `templates/packs/<pack>/pack.md`.
 
 ## Worker notes (pasted into every worker's task: keep it short)
 - <language and version, allowed libraries, style to match>

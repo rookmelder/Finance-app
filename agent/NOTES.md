@@ -10,7 +10,7 @@ Keep `CLAUDE.md` short by moving history and numbers here.
 - **Model findings**: what worked, what failed (404, timeouts, loops). Update `MODELS.md` ratings to match.
 
 ## What does NOT go in here
-- Rules for the Lead or workers: those go in `CLAUDE.md` or `roles/<role>.md`.
+- Rules for the Lead or workers: those go in `CLAUDE.md`, `agent/bases/` or `agent/roles/<role>.md`.
 - API keys or anything secret.
 - Long logs: summarise in a few lines, keep raw output in `.worker/` (git-ignored).
 
@@ -18,7 +18,7 @@ Keep `CLAUDE.md` short by moving history and numbers here.
 - New section per topic: `## <Topic> (YYYY-MM-DD)`, newest at the bottom.
 - Short and factual: numbers, model ids, what changed. One line per finding where possible.
 - Mark untested claims as untested.
-- When a finding changes which model a role should use, also update `MODELS.md` and the chains in `delegate.ps1`.
+- When a finding changes which model a role should use, also update `MODELS.md` and the `models:` line of that role in `agent/roles/`.
 
 ## Entries
 

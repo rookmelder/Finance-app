@@ -1,0 +1,20 @@
+# Setting up the workers
+
+You don't need everything. Each tool or key you add gives the Lead more (and cheaper) workers.
+After adding anything, run `powershell -NoProfile -File agent/check-setup.ps1`: it tests what you have
+and writes `SETUP.md`, and `delegate.ps1` then only uses workers that work on your machine.
+
+| What | Gives you | Cost | Guide |
+|---|---|---|---|
+| Claude Code | The Lead (required) | Your Claude plan | [claude.md](claude.md) |
+| git | Required | Free | [git.md](git.md) |
+| agy (Google Antigravity CLI) | Gemini builders, Claude Sonnet reviewer | Google AI Pro plan for real quota | [agy.md](agy.md) |
+| Copilot CLI | Runs all API workers below | Free in this setup (your own keys) | [copilot.md](copilot.md) |
+| NVIDIA key | Mistral Large 4, Nemotron | Free | [api-keys.md](api-keys.md) |
+| Gemini API key | Gemini Flash-Lite tester | Free | [api-keys.md](api-keys.md) |
+| OpenRouter key | Free fallback models (1000/day after a one-time $10) | Free models cost nothing | [api-keys.md](api-keys.md) |
+| OpenAI key | o3 reviewer on free daily tokens | Needs a small prepaid credit + data sharing | [api-keys.md](api-keys.md) |
+| Ollama | Private, local model | Free, needs a decent GPU | [ollama.md](ollama.md) |
+
+**Minimum that works:** Claude Code + git + one worker source (agy, or Copilot CLI + one free key such as NVIDIA).
+With nothing else, the Lead does the work itself.

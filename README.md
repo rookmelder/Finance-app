@@ -1,18 +1,18 @@
 # Multi-Agent: a template for working with an AI team
 
-Status: 2026-11-13. A starting folder for any project (code, writing, data, research) where Claude leads
-and cheaper AI models do the work. Clone it for each new project.
+A starting folder for any project (software, games, research, automation, writing) where **Claude leads**
+and **cheaper AI models do the work**. Clone it once per project.
 
 ## The idea in one paragraph
 
-Claude (in Claude Code) is the **boss**. It is smart but expensive, so it does the thinking: plan the
-work, write exact instructions, check every result, and save the work in git.
-The actual making (code, text, data) is handed to **cheap or free AI models** ("workers"). Workers are fast
-but make mistakes, so nothing they do is trusted until Claude has checked it.
+Claude (in Claude Code) is the **boss**. It is smart but expensive, so it does the thinking: understand what you
+want, plan, write exact instructions, check every result, and save the work in git. The actual making (code, text,
+data) is handed to **cheap or free AI models** ("workers"). Workers are fast but make mistakes, so nothing they do
+is trusted until Claude has checked it.
 
-## Starting a new project with this template
+## Starting a new project
 
-1. Make an empty repo on GitHub for the new project, then:
+1. Make an empty repo for the new project (e.g. on GitHub), then:
    ```bash
    git clone https://github.com/rookmelder/Multi-Agent.git my-project
    ```
@@ -22,14 +22,16 @@ but make mistakes, so nothing they do is trusted until Claude has checked it.
    ```bash
    git remote set-url origin https://github.com/<you>/my-project.git
    ```
-2. Copy `.env.example` to `.env` and fill in your API keys (never committed).
-3. Open the folder in Claude Code and tell it what you want to make. Claude sees that `PROJECT.md`
-   isn't filled in yet, asks you a few questions, and fills it in: what the project is, whether it's
-   private, and how to check the work (for code: the test commands).
-4. Put the project's files inside this folder (e.g. `src/`, `docs/`). Then just ask Claude for work.
-
-**What you need installed:** git, PowerShell, agy (Google Antigravity CLI, with a Google AI Pro plan),
-GitHub Copilot CLI, and optionally Ollama for private work.
+2. Set up what you have (you don't need everything): see [agent/setup/README.md](agent/setup/README.md).
+   Put your API keys in `.env` (copy `.env.example`; it is never committed).
+3. Write **[GOAL.md](GOAL.md)**: what you want, in your own words, with as much detail as you can.
+4. Open the folder in Claude Code and say "let's start". Claude then:
+   - checks which tools and keys work on your PC (writes `SETUP.md`) and asks a few questions about your plans;
+   - reads your goal and asks about anything important that's missing;
+   - picks a **pack** for your kind of project (software, game, research, automation);
+   - proposes the **roles** (which workers, doing what, with which models) for you to approve;
+   - fills in **PROJECT.md** (how the work is checked, notes for the workers).
+5. Then just ask Claude for work. It splits it up, hands it out, checks it and commits it.
 
 ## The pieces
 
@@ -38,129 +40,126 @@ GitHub Copilot CLI, and optionally Ollama for private work.
 | **Lead** | Claude. Plans, checks, decides, commits. |
 | **Worker** | A cheaper AI model that does one small, clearly described job. |
 | **Model** | The "brain" (Gemini, Mistral, o3, ...). On its own a model can only send back text. |
-| **Harness** | The program that lets a model actually *do* things on this PC: open files, write files, run tests. We use two: **agy** (Google's Antigravity CLI) and **Copilot CLI**. The harness asks the model what it wants to do, checks if that's allowed, and then does it. |
-| **Provider** | The company whose computers run the model: Google (agy and Gemini API), NVIDIA, OpenAI, OpenRouter, or Ollama on this PC. |
-| **`delegate.ps1`** | The one script that sends a job to a worker. It picks the model, adds the rules, runs it safely, and reports back. |
+| **Harness** | The program that lets a model actually *do* things on your PC: open and write files, run checks. We use **agy** (Google's Antigravity CLI) and **Copilot CLI** (GitHub). It asks the model what it wants to do, checks if that's allowed, and does it. |
+| **Role** | A job description for a worker: what it does, which models may do it, and its rules. |
+| **Pack** | A ready-made set of roles and advice for one kind of project. |
+| **`agent/delegate.ps1`** | The one script that sends a job to a worker: picks the model, adds the rules, runs it safely, reports back. |
 
-So one worker = **a model** (the brain) **+ a harness** (the hands) **+ a provider** (where the brain runs).
+## Roles
 
-## The roles (who does what)
+Every role is one small file in `agent/roles/`. It says:
+- its **base**: what kind of worker it is, which decides what it is allowed to do:
+  | Base | Allowed to |
+  |---|---|
+  | builder | make and change files, run the project's check command |
+  | tester | write tests/checks (only in the test folder), run the check command |
+  | reviewer | read only, never change anything |
+  | scribe | write documents (`.md`) only, run nothing |
+- its **models**: first choice, then fallbacks if that one is busy or out of quota;
+- its **own rules**: a few lines about what's special about the job.
 
-Each role has a list of workers. The first one is used; if it is busy or out of quota, the script
-automatically tries the next one.
+Default roles: **builder**, **builderplus** (bigger changes), **tester**, **reviewer**, **scribe**.
+Packs add more, like a game **designer** or a research **fact-checker**. To make your own, copy
+[templates/roles/ROLE-TEMPLATE.md](templates/roles/ROLE-TEMPLATE.md); it explains every line.
+Claude usually proposes the roles for you.
 
-| Role | Job | 1st choice | 2nd | 3rd |
-|---|---|---|---|---|
-| **Builder** | Make one piece from a spec: code + its tests, a text section, a data file | Gemini 3.8 Flash Low (agy) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
-| **Builder+** | Bigger or trickier changes over several files | Gemini 3.8 Flash Medium (agy) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
-| **Tester** | Write tests/checks for work it did *not* make | Gemini Flash-Lite (Gemini API) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
-| **Reviewer** | Read a change and look for mistakes (never edits) | Claude Sonnet 4.6 (agy) | o3 (OpenAI, free tokens) | gpt-oss-120b (agy) |
-| **Scribe** | Write docs like README (only `.md` files) | Nemotron Lightning (NVIDIA) | Gemini 3.8 Flash Low (agy) | Nemotron Ultra (OpenRouter, free) |
-| **Private** | Work that must never leave this PC | Gemma 4 on this PC (Ollama, slow, text only) | Claude does it itself | |
+Default models (all free, or covered by subscriptions you already have):
 
-Why this order: quality first, then free before paid, then speed. All of it is free or already paid for
-(your subscriptions). The full list of every model, with ratings, is in `MODELS.md`.
+| Role | 1st choice | 2nd | 3rd |
+|---|---|---|---|
+| builder | Gemini 3.8 Flash Low (agy) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
+| builderplus | Gemini 3.8 Flash Medium (agy) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
+| tester | Gemini Flash-Lite (Gemini API) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
+| reviewer | Claude Sonnet 4.6 (agy) | o3 (OpenAI free tokens) | gpt-oss-120b (agy) |
+| scribe | Nemotron Lightning (NVIDIA) | Gemini 3.8 Flash Low (agy) | Nemotron Ultra (OpenRouter, free) |
 
-Why the Tester and Reviewer use a different model from the Builder: a model tends to miss its own
-kind of mistakes. A different "family" catches different bugs.
+Workers you haven't set up are skipped automatically. Why this order, and every other model: [agent/MODELS.md](agent/MODELS.md).
 
-Why OpenAI is only used as a Reviewer: in our test, OpenAI's small models kept trying to write files in
-a way the safety sandbox blocks, and one got stuck in a loop. Reviewing only needs reading, so there it works.
+## Packs
+
+| Pack | For | Extra roles |
+|---|---|---|
+| [software](templates/packs/software/pack.md) | Apps, tools, libraries, backends, websites | security-reviewer |
+| [game](templates/packs/game/pack.md) | Games in any engine | designer, content, balance |
+| [research](templates/packs/research/pack.md) | Reports, comparisons, literature reviews | summarizer, writer, fact-checker |
+| [automation](templates/packs/automation/pack.md) | Scripts and workflows | scripter, safety-reviewer |
+
+Each pack says what a good goal should cover, how to check the work, how to split it, and the usual traps.
 
 ## What happens when Claude hands out a job
 
 1. Claude writes a short task: the goal, which files, the exact spec, what must be covered.
-2. `delegate.ps1` glues the **role rules** (`roles/builder.md` etc.) and the **project notes** from
-   `PROJECT.md` in front of it, and pastes in any files the worker needs (so it doesn't waste steps opening them).
-3. It starts the worker with **only the tools that role needs** (a reviewer can't write, a scribe can only
-   write `.md` files) inside a **sandbox** (it can't touch things outside this project, can't use git,
-   can't browse the web). The only command a worker may run is the project's check command from
-   `PROJECT.md`; projects without one (writing, research) get no commands at all.
-4. The worker does its piece, checks it, and ends with a 4-line report:
-   what it changed, what it did, how it checked, what it was unsure about.
-5. Claude checks: did it only touch the allowed files? Does the **full** check pass? Is the work right?
+2. `delegate.ps1` adds the role's rules and the notes from `PROJECT.md`, and pastes in the files the worker needs.
+3. It starts the worker with **only the tools its role allows**, inside a **sandbox**: it can't touch anything outside
+   the project, can't use git, can't browse the web. The only command it may run is the project's check command.
+4. The worker does its piece, checks it, and ends with a short report.
+5. Claude checks: did it only touch the allowed files? Does the full check pass? Is the work right?
    Then Claude fixes, asks a reviewer, and commits.
-
-## How big jobs are split
 
 | Job size | What happens |
 |---|---|
 | Tiny (under ~30 lines) | Claude just does it; explaining would take longer. |
-| Small (1 file) | 1 builder, then Claude checks. |
-| Medium (2-4 files) | 2 builders at the same time on different files, then a tester and a reviewer, then Claude fixes and commits. |
-| Large (5+ files) | Claude writes the spec first, builders work in waves (max 4 at once), then testers/reviewers, a scribe for docs, and a final check. |
+| Small (1 file) | 1 worker, then Claude checks. |
+| Medium (2-4 files) | 2 workers at once on different files, then a tester and a reviewer, then Claude fixes and commits. |
+| Large (5+ files) | Claude writes a spec first, workers go in waves (max 4 at once), then testers/reviewers and a final check. |
 
-At most 4 workers run at once, and never two on the same file.
+## Money, limits and privacy
 
-## Money and limits (so nothing surprises you)
+| Provider | Costs | Free limit |
+|---|---|---|
+| Claude | Your Claude plan | Plan limits; kept for thinking and checking |
+| agy | Google AI Pro plan | Resets every 5 hours; ~20 worker jobs use 6-7% of a window |
+| NVIDIA | Free | ~40 requests a minute |
+| Gemini API | Free | ~500 requests a day (Flash-Lite) |
+| OpenRouter | Free models cost nothing | 50 a day, or 1000 a day once you ever bought $10 credit |
+| OpenAI | Small prepaid credit | Free daily tokens with data sharing on: 250k (big models), 2.5M (small) |
+| Ollama | Free, on your PC | Unlimited, but slow on small GPUs |
 
-| Provider | Costs you | Free limit | Notes |
-|---|---|---|---|
-| Claude | Your Claude plan | Plan limits | Kept for thinking and checking. |
-| agy (Google AI Pro) | Your Pro subscription | Resets every 5 hours | ~20 worker jobs use about 6-7% of one window. |
-| NVIDIA | Nothing | Roughly 40 requests a minute | Slow when busy. |
-| Gemini API | Nothing | ~500 requests a day | Free tier may train on your prompts. |
-| OpenRouter | $11 credit, **untouched** by free models | 1000 free requests a day | We only use its free models. |
-| OpenAI | $5 credit (expires after a year) | 250k tokens/day big models, 2.5M/day small models | `delegate.ps1` protects the $5, see below. |
-| Ollama | Nothing | Unlimited | Runs on this PC; slow on 8 GB of video memory. |
-
-**The OpenAI guard** (so the $5 is never touched):
-- Models that aren't in the free group are refused.
-- It keeps a daily count and stops at 90% of the free amount.
-- It also watches *during* a job and stops it if it is about to cross that line, or if one job alone uses too
-  much (60k tokens for big models, 400k for small ones). It can still go a little over in rare cases
-  (one call can suddenly get big), which is why the 10% safety margin exists.
-- The count is our own estimate; OpenAI's dashboard (platform.openai.com > Usage) is the real number.
-
-**Privacy:** the free tiers of NVIDIA, Gemini API, OpenRouter and OpenAI may read or train on what you send.
-Private code goes only to Claude, agy or Ollama.
+- **OpenAI guard:** `delegate.ps1` refuses models that would bill your credit, and stops at 90% of the free daily
+  tokens, also in the middle of a job. Its count is an estimate; OpenAI's usage page is the real number.
+- **Privacy:** the free tiers of NVIDIA, Gemini API, OpenRouter and OpenAI may read or train on what you send.
+  Mark a project private in `PROJECT.md` and `delegate.ps1` only uses agy (or Ollama); Claude does the rest.
 
 ## Keeping tokens (and so cost and speed) down
 
-Every time a model takes a step, the whole conversation so far is sent again (the API has no memory).
-So we keep each step small:
-- Workers get only the tools their role needs (a step went from ~18.7k to ~2.6k tokens on Copilot, and
-  from ~10.4k to ~3.6k on agy).
-- Role rules are short and to the point.
-- Needed files are pasted in up front, so the worker doesn't spend steps opening them.
-- Workers run only their own tests, not the whole suite.
-
-Measured on the same coding job (checked with hidden tests), before vs after these savings:
-- agy Gemini Flash Low: same quality (2/2 correct), **38% fewer tokens**.
-- NVIDIA Mistral: same quality (2/2 correct), **59% fewer tokens**, about 35% faster, no more timeouts.
+Every step a model takes resends the whole conversation (the API has no memory), so each step is kept small:
+workers get only the tools their role needs, short rules, the files they need pasted in up front, and they only
+run their own check. On a test job this saved 38-59% of the tokens at the same quality.
 
 ## The files
 
 | File / folder | What it is |
 |---|---|
+| `GOAL.md` | **You write this:** what you want. |
+| `PROJECT.md` | Claude fills this in: settings and notes for this project. |
+| `SETUP.md` | Made by `agent/check-setup.ps1`: what works on your PC (not committed). |
 | `CLAUDE.md` | The rulebook Claude reads at the start of every session. |
-| `PROJECT.md` | The one file you change per project: what it is, how to check the work, notes for workers. |
-| `README.md` | This explanation. |
-| `MODELS.md` | Every model you can use: cost, limits, rating, and the pick order per role. |
-| `NOTES.md` | Measurements and lessons learned (starts empty; rules at the top). |
-| `delegate.ps1` | The script that runs a worker. |
-| `roles/*.md` | The short rules each kind of worker gets. |
-| `.agents/agents/w-*.md` | Trimmed tool sets for agy workers. Your own agy chats are not affected. |
-| `.env` | Your API keys. **Never shared, never committed to git.** |
-| `.env.example` | Empty template that says where to get each key. |
-| `.worker/` | Scratch space for tasks, results and the OpenAI usage counter (not saved in git). |
+| `agent/roles/` | The roles in use in this project. |
+| `agent/bases/` | The core rules for each base type. |
+| `agent/delegate.ps1` | Runs a worker. `agent/check-setup.ps1` checks your setup. |
+| `agent/MODELS.md` | Every model: cost, limits, rating, pick order. |
+| `agent/NOTES.md` | Measurements and lessons learned (starts empty). |
+| `agent/setup/` | How to install each tool and get each key. |
+| `templates/` | Role template and project packs. |
+| `.agents/agents/` | Trimmed tool sets for agy workers (your own agy chats are not affected). |
+| `.env` / `.env.example` | Your API keys (never committed) / the empty template. |
+| `.worker/` | Scratch space for tasks, results and the OpenAI usage counter (not committed). |
 
 ## Running a worker yourself
 
 ```bash
-powershell -NoProfile -File delegate.ps1 -Role builder -TaskFile .worker/t1.md -Include src/shop.py
+powershell -NoProfile -File agent/delegate.ps1 -Role builder -TaskFile .worker/t1.md -Include src/shop.py
 ```
 
-- `-Role` picks the job: builder, builderplus, tester, reviewer, scribe.
-- `-Include` pastes files into the task.
-- `-Model` (an agy model) or `-Provider` + `-ProviderModel` force one specific worker (no fallback).
-- `-Local` uses Ollama on this PC (private).
-- Result codes: 0 OK, 2 no task given, 3 took too long, 4 tried something forbidden, 5 empty answer, 6 provider problem.
+- `-Role` picks the role (any file in `agent/roles/`). `-Include` pastes files into the task.
+- `-Model` (an agy model) or `-Provider` + `-ProviderModel` force one specific worker. `-Local` uses Ollama.
+- Result codes: 0 OK, 2 unknown role or no task, 3 took too long, 4 tried something forbidden, 5 empty answer,
+  6 provider problem or no worker available.
 
 ## Known weak spots
 
 - Workers make mistakes; that's expected, Claude checks everything.
-- agy is sometimes busy ("no capacity"); the script then moves on to the next worker.
-- The OpenAI count is an estimate, and one call can push slightly past the line.
-- If a file called `AGENTS.md` or `GEMINI.md` is in this folder, agy loads it into **every** worker as
-  extra rules. Keep worker instructions in `roles/` instead.
+- Workers can't create folders and can't browse the web; Claude does those parts.
+- agy is sometimes busy ("no capacity"); the next worker in the chain takes over.
+- agy workers can only run commands allowed in agy's global settings (see `agent/setup/agy.md`).
+- If a file called `AGENTS.md` or `GEMINI.md` is in the project, agy loads it into every worker. Don't add one.

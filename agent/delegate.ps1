@@ -3,14 +3,14 @@
   Send one task to a worker (agy, Copilot+cloud API, or local Ollama) by role, with safe defaults.
 
 .EXAMPLES
-  powershell -NoProfile -File delegate.ps1 -Role builder -TaskFile .worker/t1.md -Include src/shop.py
-  powershell -NoProfile -File delegate.ps1 -Role reviewer -TaskFile .worker/review.md
-  powershell -NoProfile -File delegate.ps1 -Role builder -Provider nvidia -TaskFile .worker/t1.md   # force one worker
-  powershell -NoProfile -File delegate.ps1 -Local -TaskFile .worker/t1.md                         # private, text only
+  powershell -NoProfile -File agent/delegate.ps1 -Role builder -TaskFile .worker/t1.md -Include src/shop.py
+  powershell -NoProfile -File agent/delegate.ps1 -Role reviewer -TaskFile .worker/review.md
+  powershell -NoProfile -File agent/delegate.ps1 -Role builder -Provider nvidia -TaskFile .worker/t1.md   # force one worker
+  powershell -NoProfile -File agent/delegate.ps1 -Local -TaskFile .worker/t1.md                         # private, text only
 
-  Roles: builder | builderplus | tester | reviewer | scribe (rules in roles/<role>.md).
-  Each role has a worker chain; on a transient provider error (429/503/no capacity) it retries
-  once, then moves to the next worker. -Model / -Provider pick one worker (no fallback chain).
+  Roles: any agent/roles/<name>.md (frontmatter: base, models). Core rules per base: agent/bases/<base>.md.
+  Each role has a worker chain; workers missing on this machine (SETUP.md) are skipped. On a transient
+  provider error (429/503/no capacity) it retries once, then moves on. -Model / -Provider force one worker.
   Output: a short summary (full JSON saved in .worker/last.json); -Json prints the JSON instead.
   Exit: 0 ok, 2 no task, 3 timeout (check git status: files often exist), 4 blocked, 5 empty, 6 provider error.
   Project settings (check commands, worker notes) come from PROJECT.md.
@@ -18,8 +18,7 @@
 param(
     [string]$Task,
     [string]$TaskFile,
-    [ValidateSet('builder', 'builderplus', 'tester', 'reviewer', 'scribe')]
-    [string]$Role = 'builder',
+    [string]$Role = 'builder',     # any agent/roles/<name>.md
     [string[]]$Include,            # files appended to the prompt with line numbers (saves exploring calls)
     [ValidateSet('gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high', 'gpt-oss-120b-medium', 'claude-sonnet-4-6')]
     [string]$Model,
@@ -37,7 +36,10 @@ param(
     [string]$LocalModel = 'gemma4:12b'
 )
 $ErrorActionPreference = 'Stop'
-$root = $PSScriptRoot
+function Fail($msg, $code) { [Console]::Error.WriteLine("ERROR: $msg"); exit $code }   # Write-Error + Stop would exit 1
+$agentDir = $PSScriptRoot                  # agent/: this script, bases/, roles/
+$root = Split-Path $agentDir -Parent       # project root: workers work here
+Set-Location $root
 New-Item -ItemType Directory -Force (Join-Path $root '.worker') | Out-Null   # git-ignored, so missing in a fresh clone
 
 # API keys: real environment variables win; otherwise read KEY=VALUE lines from .env (process only).
@@ -60,21 +62,49 @@ if (Test-Path $projFile) {
     }
     if ($pt -match '(?s)## Worker notes[^\n]*\n(.*?)(?=\n## |\z)') { $workerNotes = $Matches[1].Trim() }
     if ($workerNotes -match '^- <') { $workerNotes = '' }   # template placeholder, not filled in
+    $private = $pt -match '\*\*Private\?\*\*\s*yes'          # private: only agy (and -Local), never the free cloud APIs
 }
 $checkStem = if ($proj.check_one) { ($proj.check_one -split '\s+')[0] } else { '' }   # Copilot matches the command's first word only
 
-# --- Workers per role (first = main, rest = fallbacks) --------------------------------
-# Order = MODELS.md pick order, minus models that failed for that job (OpenAI writes files via the
-# shell, so it is only used for the read-only reviewer). Last resort: OpenRouter free (1000 req/day).
-$orFree = @{ h = 'cp'; p = 'openrouter'; pm = 'nvidia/nemotron-3-ultra-550b-a55b:free' }
-$chains = @{
-    builder     = @(@{ h = 'agy'; m = 'gemini-3.8-flash-low' },    @{ h = 'cp'; p = 'nvidia' }, $orFree)
-    builderplus = @(@{ h = 'agy'; m = 'gemini-3.8-flash-medium' }, @{ h = 'cp'; p = 'nvidia' }, $orFree)
-    tester      = @(@{ h = 'cp'; p = 'gemini' },                    @{ h = 'cp'; p = 'nvidia' }, $orFree)
-    reviewer    = @(@{ h = 'agy'; m = 'claude-sonnet-4-6' },       @{ h = 'cp'; p = 'openai'; pm = 'o3' }, @{ h = 'agy'; m = 'gpt-oss-120b-medium' })
-    scribe      = @(@{ h = 'cp'; p = 'nvidia'; pm = 'nvidia/nemotron-3.5-lightning-30b-a3b' }, @{ h = 'agy'; m = 'gemini-3.8-flash-low' }, $orFree)
+# --- Role: agent/roles/<Role>.md = frontmatter (base, models, does) + extra instructions --------
+# base = builder|tester|reviewer|scribe: sets the worker's tools and core rules (agent/bases/<base>.md).
+# models = the worker chain, first = main: "agy:<model>" or "<provider>:<model id>" (provider = nvidia,
+# gemini, openrouter, openai). Pick order and ratings: agent/MODELS.md.
+$roleFile = Join-Path $agentDir "roles\$Role.md"
+if (-not (Test-Path $roleFile)) {
+    $have = (Get-ChildItem (Join-Path $agentDir 'roles') -Filter *.md | ForEach-Object BaseName) -join ', '
+    Fail "No role '$Role'. Roles: $have (agent/roles/). New role: copy templates/roles/ROLE-TEMPLATE.md." 2
 }
-$roleFile = @{ builder = 'builder'; builderplus = 'builder'; tester = 'tester'; reviewer = 'reviewer'; scribe = 'scribe' }[$Role]
+$rt = Get-Content -Raw -Encoding UTF8 $roleFile
+$fm = @{}; $roleBody = $rt
+if ($rt -match '(?s)^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?(.*)$') {
+    $roleBody = $Matches[2].Trim()
+    foreach ($l in $Matches[1] -split '\r?\n') { if ($l -match '^\s*(\w+)\s*:\s*(.*?)\s*$') { $fm[$Matches[1]] = $Matches[2] } }
+}
+$base = if ($fm.base) { $fm.base } else { 'builder' }
+if ($base -notin 'builder', 'tester', 'reviewer', 'scribe') { Fail "Role '$Role': base must be builder, tester, reviewer or scribe (got '$base')." 2 }
+function ConvertTo-Worker($s) {   # "agy:gemini-3.8-flash-low" | "nvidia" | "openrouter:vendor/model:free"
+    $s = $s.Trim(); $i = $s.IndexOf(':')
+    $head = if ($i -ge 0) { $s.Substring(0, $i) } else { $s }; $rest = if ($i -ge 0) { $s.Substring($i + 1) } else { '' }
+    if ($head -eq 'agy') { @{ h = 'agy'; m = $rest } } else { @{ h = 'cp'; p = $head; pm = $rest } }
+}
+$defaultModels = @{   # used when a role file has no models: line
+    builder  = 'agy:gemini-3.8-flash-low, nvidia, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free'
+    tester   = 'gemini, nvidia, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free'
+    reviewer = 'agy:claude-sonnet-4-6, openai:o3, agy:gpt-oss-120b-medium'
+    scribe   = 'nvidia:nvidia/nemotron-3.5-lightning-30b-a3b, agy:gemini-3.8-flash-low, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free'
+}
+$modelList = if ($fm.models) { $fm.models } else { $defaultModels[$base] }
+$roleChain = @($modelList -split ',' | Where-Object { $_.Trim() } | ForEach-Object { ConvertTo-Worker $_ })
+
+# What this machine has (SETUP.md, made by agent/check-setup.ps1): skip workers that can't run here.
+$available = $null
+$setupFile = Join-Path $root 'SETUP.md'
+if ((Test-Path $setupFile) -and ((Get-Content -Raw -Encoding UTF8 $setupFile) -match '(?s)```available\s*\r?\n(.*?)```')) {
+    $available = @{}
+    foreach ($l in $Matches[1] -split '\r?\n') { if ($l -match '^\s*(\w+)\s*:\s*(yes|no)') { $available[$Matches[1]] = $Matches[2] -eq 'yes' } }
+}
+function Test-Available($w) { if (-not $available) { return $true }; $k = if ($w.h -eq 'agy') { 'agy' } else { $w.p }; [bool]$available[$k] }
 $providers = @{
     openrouter = @{ url = 'https://openrouter.ai/api/v1'; key = 'OPENROUTER_API_KEY'; model = 'openrouter/free' }
     nvidia     = @{ url = 'https://integrate.api.nvidia.com/v1'; key = 'NVIDIA_API_KEY'; model = 'mistralai/mistral-large-4-1t-a52b' }
@@ -93,19 +123,24 @@ $cpTools = @{
     scribe   = @{ tools = 'view,create,edit,grep,glob'; allow = @('write(**/*.md)') }
     reviewer = @{ tools = "view,grep,glob$shTools"; allow = $sh }
 }
-$cpRole = @{ builder = 'builder'; builderplus = 'builder'; tester = 'tester'; reviewer = 'reviewer'; scribe = 'scribe' }[$Role]
+$cpRole = $base
+if ($private -and ($Provider -or $OpenRouter)) { Fail 'PROJECT.md says this project is private: cloud API workers are not allowed. Use agy (-Model), -Local, or do it yourself.' 6 }
 
 if ($OpenRouter) { $Provider = 'openrouter'; if (-not $ProviderModel) { $ProviderModel = $OpenRouter } }
-if ($Model) { $chain = @(@{ h = 'agy'; m = $Model }) }
+if ($Model) { $chain = @(@{ h = 'agy'; m = $Model }) }     # forced: no availability filter, no fallback
 elseif ($Provider) { $chain = @(@{ h = 'cp'; p = $Provider; pm = $ProviderModel }) }
-else { $chain = $chains[$Role] }
+else {
+    $chain = @($roleChain | Where-Object { (Test-Available $_) -and -not ($private -and $_.h -ne 'agy') })
+    if (-not $chain.Count) { Fail "Role '$Role': none of its workers ($modelList) is available on this machine (SETUP.md). Add one, or do it yourself." 6 }
+}
 
 # --- Prompt: role rules + task + included files ---------------------------------------
 if ($TaskFile) { $Task = Get-Content -Raw -Encoding UTF8 $TaskFile }
-if (-not $Task) { Write-Error 'Give -Task "..." or -TaskFile <path>.'; exit 2 }
+if (-not $Task) { Fail 'Give -Task "..." or -TaskFile <path>.' 2 }
 if (-not $Conversation) {
-    $rules = Get-Content -Raw -Encoding UTF8 (Join-Path $root "roles\$roleFile.md")
-    $check = if ($Role -eq 'scribe') { 'Run no commands.' }
+    $rules = Get-Content -Raw -Encoding UTF8 (Join-Path $agentDir "bases\$base.md")
+    if ($roleBody) { $rules += "`n## Your role: $Role`n$roleBody`n" }
+    $check = if ($base -eq 'scribe') { 'Run no commands.' }
              elseif ($proj.check_one) { "Check command (the ONLY command you may run, for your own part; {name} = your part): ``$($proj.check_one)``" }
              else { 'This project has no check command: run no commands. Re-read your files against the spec instead.' }
     $notes = if ($workerNotes) { "`n$workerNotes" } else { '' }
@@ -119,7 +154,7 @@ if ($Include) { $Task += "`n`nThe files above are current. Don't re-read them; r
 
 # --- Local Ollama (text only) -----------------------------------------------------------
 if ($Local) {
-    if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) { Write-Error 'ollama not found on PATH.'; exit 3 }
+    if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) { Fail 'ollama not found on PATH.' 3 }
     $Task += "`n`nNOTE: you cannot edit files or run commands. Reply with the COMPLETE contents of every file you change, each in a fenced block whose first line is a comment with its path. Then the report."
     $Task | ollama run $LocalModel
     exit $LASTEXITCODE
@@ -132,7 +167,7 @@ function Get-Changes {
 # --- One attempt on agy ------------------------------------------------------------------
 function Invoke-Agy($w) {
     $prompt = $Task
-    if ($Role -in 'builder', 'builderplus', 'tester') {
+    if ($base -in 'builder', 'tester') {
         $prompt += if ($proj.check_one) { "`n`nREMINDER: only command allowed: '$($proj.check_one)' for your own part. Run it max 2x. End with the report." }
                    else { "`n`nREMINDER: run no commands. End with the report." }
     }
@@ -207,10 +242,10 @@ function Invoke-Copilot($w) {
                 error = "REFUSED: OpenAI $tier free tier at $used of $limit tokens today (stop at 90%; capacity)." }
         }
     }
-    if (-not (Get-Command copilot -ErrorAction SilentlyContinue)) { Write-Error 'copilot not found on PATH.'; exit 3 }
+    if (-not (Get-Command copilot -ErrorAction SilentlyContinue)) { Fail 'copilot not found on PATH.' 3 }
     $key = [Environment]::GetEnvironmentVariable($pv.key, 'Process')
     if (-not $key) { $key = [Environment]::GetEnvironmentVariable($pv.key, 'User') }
-    if (-not $key) { Write-Error "Put $($pv.key)=... in .env (see .env.example)."; exit 3 }
+    if (-not $key) { Fail "Put $($pv.key)=... in .env (see .env.example)." 3 }
     # Process-scoped: the user's own copilot/Ollama setup is untouched.
     $env:COPILOT_PROVIDER_BASE_URL = $pv.url; $env:COPILOT_PROVIDER_TYPE = 'openai'; $env:COPILOT_PROVIDER_API_KEY = $key
     $env:COPILOT_MODEL = if (-not $w.pm -or $w.pm -eq 'free') { $pv.model } else { $w.pm }
