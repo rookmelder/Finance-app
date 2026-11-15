@@ -40,7 +40,7 @@ Read this once per project. Do the steps in order; skip what is already done.
 | `agent/LIMITS.md` | you | What each provider costs, its free limits and its quirks. |
 | `agent/notes/` | you | What we measured and learned about the setup: one note per entry, index in its `README.md`. |
 | `knowledge/` | you + scribe | The project's knowledge map: small linked notes per system, finding, decision. |
-| `agent/check_docs.py` | template | Checks `knowledge/` and `agent/notes/`: broken links, orphans, missing files. |
+| `agent/check_docs.py` | template | Checks `knowledge/` and `agent/notes/` (broken links, orphans, missing files); `--find <words>` searches them. |
 | `agent/setup/` | template | How to install each tool and get each key (point the user here). |
 | `templates/` | template | `roles/ROLE-TEMPLATE.md`, project packs (`packs/<type>/`), note templates (`notes/`). |
 | `README.md` | template | The whole setup explained for the user in plain words. |

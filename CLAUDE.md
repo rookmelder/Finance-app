@@ -55,7 +55,8 @@ python agent/delegate.py --role builder --task-file .worker/t1.md --part shop --
   and the diff, and `--include` each changed file.
 
 ## Knowledge map (`knowledge/`)
-Small linked notes instead of reading the codebase: `knowledge/README.md` → topic index → the one note you need.
+Small linked notes instead of reading the codebase. To find one: `python agent/check_docs.py --find <words>` (one line
+per note: path + summary, best first), then read only that note. Browse the indexes only when you have no word to search.
 - Before planning a piece, read its system note: it names the files to `--include`. Give workers that note too.
 - After a piece is committed, its system note must match: new or changed via a scribe (`--files <the note>
   --include <the note> <changed files>`, template in `templates/notes/`); you fact-check every path and add the

@@ -156,7 +156,7 @@ included), and `grep -rh "^> " knowledge` prints the whole map in one screen.
 | `agent/START.md` | The steps Claude follows at the start of a project. |
 | `agent/notes/` | Measurements and lessons about the setup itself, one small note each. |
 | `knowledge/` | The project's knowledge map: one small note per part, lesson or decision (see below). |
-| `agent/check_docs.py` | Checks the notes: broken links, notes nobody links to, file paths that no longer exist. |
+| `agent/check_docs.py` | Checks the notes (broken links, notes nobody links to, file paths that no longer exist); `--find <words>` searches them. |
 | `agent/setup/` | How to install each tool and get each key. |
 | `templates/` | Role template, project packs and note templates. |
 | `.agents/agents/` | Trimmed tool sets for agy workers (your own agy chats are not affected). |

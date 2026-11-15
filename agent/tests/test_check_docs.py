@@ -187,6 +187,40 @@ class TestCheckDocs(unittest.TestCase):
             self.assertEqual(problems[0], ('ERROR', 'knowledge/sub1/item.md', 0, 'duplicate note name: item.md (also knowledge/sub2/ITEM.md)'))
             self.assertEqual(problems[1], ('ERROR', 'knowledge/sub2/ITEM.md', 0, 'duplicate note name: ITEM.md (also knowledge/sub1/item.md)'))
 
+    def test_find(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            write(repo / 'knowledge' / 'README.md', "# Index\n\n> shop index, must not be listed\n")
+            write(repo / 'knowledge' / 'systems' / 'systems.md', "# Systems\n\nshop\n")
+            write(repo / 'knowledge' / 'systems' / 'system-shop.md', "# System: Shop\n> Buying items with coins.\n\nPrices in cents.\n")
+            write(repo / 'knowledge' / 'findings' / 'finding-coins.md', "# Coins\n\n> Coins are saved per shop visit.\n")
+            write(repo / 'knowledge' / 'findings' / 'finding-ui.md', "# UI\n> Buttons use Activated.\n\nThe shop button too.\n")
+            write(repo / 'knowledge' / 'findings' / 'finding-old.md', "# Old note without summary\n\ntext about the shop\n")
+            hits = cd.find_notes([repo / 'knowledge'], repo, ['Shop'])
+            self.assertEqual([h[1] for h in hits], ['knowledge/systems/system-shop.md',   # name 3
+                                                    'knowledge/findings/finding-coins.md',  # summary 2
+                                                    'knowledge/findings/finding-old.md',    # text 1, ties by path
+                                                    'knowledge/findings/finding-ui.md'])
+            self.assertEqual(hits[0][2], 'Buying items with coins.')
+            self.assertEqual(hits[2][2], 'Old note without summary')   # no summary: the title
+            self.assertEqual([h[1] for h in cd.find_notes([repo / 'knowledge'], repo, ['shop', 'cents'])],
+                             ['knowledge/systems/system-shop.md'])   # every word must match
+            self.assertEqual(cd.find_notes([repo / 'knowledge'], repo, ['nothing']), [])
+
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cd.main(['--repo', str(repo), '--find', 'shop', 'cents']), 0)
+            self.assertEqual(out.getvalue(), 'knowledge/systems/system-shop.md: Buying items with coins.\n')
+            for i in range(12):
+                write(repo / 'knowledge' / 'findings' / f'finding-x{i:02}.md', f"# X{i}\n> about shop {i}\n")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cd.main(['--repo', str(repo), '--find', 'shop']), 0)
+            self.assertEqual(len(out.getvalue().splitlines()), cd.FIND_MAX + 1)
+            self.assertIn('... 6 more: add a word', out.getvalue())
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(cd.main(['--repo', str(repo), '--find', 'zebra']), 1)
+
     def test_main(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)

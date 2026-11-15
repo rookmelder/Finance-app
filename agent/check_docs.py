@@ -1,4 +1,5 @@
-"""Check markdown notes folders for broken links, missing files, orphans, and formatting: python check_docs.py [folders] [--repo REPO]"""
+"""Check markdown notes folders for broken links, missing files, orphans, and formatting: python check_docs.py [folders] [--repo REPO]
+Search them, one line per note: python check_docs.py --find shop price """
 from __future__ import annotations
 
 import argparse
@@ -194,6 +195,45 @@ def check_folder(root: Path, repo: Path) -> list[tuple[str, str, int, str]]:
     return problems
 
 
+FIND_MAX = 10
+
+
+def _summary(lines: list[str]) -> str:
+    """The "> ..." line under the title, or the title itself."""
+    title = ''
+    for line in lines:
+        if not title:
+            if line.startswith('# '):
+                title = line[2:].strip()
+        elif line.strip():
+            return line[2:].strip() if line.startswith('> ') else title
+    return title
+
+
+def find_notes(roots: list[Path], repo: Path, words: list[str]) -> list[tuple[int, str, str]]:
+    """Notes matching the words, best first: (score, relpath, summary). Per word: file name 3, summary 2, text 1.
+    Every word must match somewhere. Index notes are left out: they only repeat the summaries."""
+    words = [w.lower() for w in words if w.strip()]
+    hits = []
+    for root in roots:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+            for f in filenames:
+                note = Path(dirpath) / f
+                if not f.endswith('.md') or _is_index_note(note, root):
+                    continue
+                try:
+                    lines = note.read_text(encoding='utf-8').splitlines()
+                except (OSError, UnicodeDecodeError):
+                    continue
+                summary, text, name = _summary(lines), '\n'.join(lines).lower(), f.lower()
+                scores = [3 if w in name else 2 if w in summary.lower() else 1 if w in text else 0 for w in words]
+                if words and all(scores):
+                    rel = note.resolve().relative_to(repo.resolve()).as_posix() if note.resolve().is_relative_to(repo.resolve()) else note.as_posix()
+                    hits.append((sum(scores), rel, summary))
+    return sorted(hits, key=lambda h: (-h[0], h[1]))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='Check markdown notes folders.')
     parser.add_argument('folders', nargs='*', default=DEFAULT_FOLDERS,
@@ -201,8 +241,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--repo', default=str(REPO),
                         help='Repository root path')
 
+    parser.add_argument('--find', nargs='+', metavar='WORD',
+                        help='search instead of check: notes containing all these words, one line each, best first')
+
     args = parser.parse_args(argv)
     repo = Path(args.repo).resolve()
+
+    if args.find is not None:
+        roots = [(repo / f).resolve() for f in args.folders if (repo / f).is_dir()]
+        words = ' '.join(args.find).split()
+        hits = find_notes(roots, repo, words)
+        for _, rel, summary in hits[:FIND_MAX]:
+            print(f'{rel}: {summary}')
+        if len(hits) > FIND_MAX:
+            print(f'... {len(hits) - FIND_MAX} more: add a word')
+        if not hits:
+            print('no note matches all of: ' + ' '.join(words))
+        return 0 if hits else 1
 
     folders_to_check = args.folders
     is_default = (folders_to_check == DEFAULT_FOLDERS)
