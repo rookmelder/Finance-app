@@ -156,6 +156,8 @@ class Check(unittest.TestCase):
                          (True, 1, 20, 'report 2'))
         self.assertIn('check: PASS', out)
         self.assertIn('after 1 fix round', out)
+        self.assertRegex(last['run_file'], r'^\.worker/run-[0-9a-f]{8}\.json$')
+        self.assertIn('saved: ' + last['run_file'], out)
 
     def test_check_still_failing_is_exit_7(self):
         calls = []
@@ -179,6 +181,41 @@ class Check(unittest.TestCase):
         with self.assertRaises(d.Fail) as e:
             d.main(['--task', 'x', '--part', 'a; rm -rf .'])
         self.assertEqual(e.exception.code, 2)
+
+
+class Changes(unittest.TestCase):
+    def test_snapshot_sees_new_edited_again_and_reverted(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as t:
+            def git(*args):
+                subprocess.run(['git', '-C', t, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', *args],
+                               check=True, capture_output=True)
+            git('init', '-q')
+            for n in ('a.py', 'b.py', 'my file.py'):
+                Path(t, n).write_text('1\n', encoding='utf-8')
+            git('add', '-A')
+            git('commit', '-qm', 'base')
+            Path(t, 'a.py').write_text('2\n', encoding='utf-8')        # dirty before the worker starts
+            Path(t, 'b.py').write_text('2\n', encoding='utf-8')
+            os.mkdir(Path(t, '.worker'))
+            Path(t, '.worker', 'x.json').write_text('{}', encoding='utf-8')
+            before = d.git_snapshot(t)
+            self.assertEqual(sorted(before), ['a.py', 'b.py'])
+            self.assertEqual(d.changed_since(before, d.git_snapshot(t)), [])
+            Path(t, 'a.py').write_text('3\n', encoding='utf-8')        # edited again: same git status line
+            Path(t, 'b.py').write_text('1\n', encoding='utf-8')        # back to the committed text
+            Path(t, 'my file.py').write_text('2\n', encoding='utf-8')
+            Path(t, 'new.py').write_text('x\n', encoding='utf-8')
+            self.assertEqual(d.changed_since(before, d.git_snapshot(t)),
+                             [' M a.py', ' M my file.py', '?? new.py', '-- b.py'])
+
+    def test_scope(self):
+        lines = ['?? src/shop.py', ' M tests/test_shop.py', '?? src/cart.py', ' M .env']
+        own, outside = d.split_scope(lines, ['./src/shop.py', 'tests\\test_*.py'])
+        self.assertEqual(own, ['?? src/shop.py', ' M tests/test_shop.py'])
+        self.assertEqual(outside, ['?? src/cart.py', ' M .env'])
+        self.assertEqual(d.split_scope(lines, []), (lines, []))
+        self.assertTrue(d.in_scope(' M .env', ['.env']))
 
 
 class Results(unittest.TestCase):

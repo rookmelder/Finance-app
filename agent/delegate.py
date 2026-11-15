@@ -13,14 +13,17 @@ provider error (429/503/no capacity) it retries once, then moves on. --model / -
 Workers run no commands. For builder/tester roles this script runs check_one itself after the worker is done
 (--part fills {name}); when it fails, the worker gets the output once to fix it, then the check runs again.
 For reviewer roles the check runs first and its result is pasted into the task.
-Output: a short summary (full JSON saved in .worker/last.json); --json prints the JSON instead.
+--files names what the task may change: with workers in parallel, each run then reports only its own files.
+Output: a short summary (full JSON saved in .worker/run-<id>.json and .worker/last.json); --json prints the JSON instead.
 Exit: 0 ok, 2 no task, 3 timeout (check git status: files often exist), 4 blocked, 5 empty, 6 provider error,
 7 check failed.
 Project settings (check commands, worker notes) come from PROJECT.md. Standard library only.
 """
 import argparse
 import datetime
+import fnmatch
 import glob
+import hashlib
 import json
 import os
 import re
@@ -235,10 +238,47 @@ def build_prompt(task, base, role, role_body, rules, proj, notes, includes, conv
     return task
 
 
-def git_changes(root):
-    r = subprocess.run(['git', '-C', str(root), 'status', '--porcelain', '-uall'],
+def git_snapshot(root):
+    """Every file git sees as changed or new -> {path: (status, content hash)}.
+    The hash also shows a second edit to a file that was already changed before the worker started."""
+    r = subprocess.run(['git', '-C', str(root), 'status', '--porcelain', '-z', '-uall'],
                        capture_output=True, text=True, encoding='utf-8', errors='replace')
-    return [l for l in r.stdout.splitlines() if l and not re.search(r'__pycache__|\.worker/', l)]
+    snap, parts, i = {}, r.stdout.split('\0'), 0
+    while i < len(parts):
+        entry = parts[i]
+        i += 1
+        if len(entry) < 4:
+            continue
+        xy, path = entry[:2], entry[3:]
+        if 'R' in xy or 'C' in xy:   # rename/copy: the next field is the old path
+            i += 1
+        if re.search(r'__pycache__|(^|/)\.worker/', path):
+            continue
+        try:
+            digest = hashlib.sha1((Path(root) / path).read_bytes()).hexdigest()
+        except OSError:
+            digest = None   # deleted
+        snap[path] = (xy, digest)
+    return snap
+
+
+def changed_since(before, after):
+    """['?? new.py', ' M edited.py', '-- back_to_clean.py'] for everything that differs between two snapshots."""
+    out = [f'{after[p][0]} {p}' for p in sorted(after) if after[p] != before.get(p)]
+    return out + [f'-- {p}' for p in sorted(before) if p not in after]
+
+
+def in_scope(line, patterns):
+    """Is this changed-file line one of the files (or globs) the task may touch?"""
+    path = line[3:].replace('\\', '/')
+    return any(fnmatch.fnmatchcase(path, re.sub(r'^\./', '', pat.replace('\\', '/'))) for pat in patterns)
+
+
+def split_scope(lines, patterns):
+    """(own changes, changes outside --files). Without --files everything counts as own."""
+    if not patterns:
+        return lines, []
+    return [l for l in lines if in_scope(l, patterns)], [l for l in lines if not in_scope(l, patterns)]
 
 
 def kill_tree(proc):
@@ -532,6 +572,8 @@ def parse_args(argv):
     ap.add_argument('--openrouter', metavar='ID', help='shortcut: --provider openrouter --provider-model ID')
     ap.add_argument('--conversation', help='follow-up on an earlier result (max 2)')
     ap.add_argument('--schema', help='agy: JSON schema file for the final result')
+    ap.add_argument('--files', nargs='+', default=[], metavar='FILE',
+                    help='the files (or globs) this task may change; other changes are listed apart')
     ap.add_argument('--part', metavar='NAME', help='the part this task is about: fills {name} in check_one')
     ap.add_argument('--no-check', action='store_true', help='do not run check_one for this task')
     ap.add_argument('--no-fix', action='store_true', help='run the check, but do not send a failure back to the worker')
@@ -620,14 +662,15 @@ def main(argv=None):
     ctx.openai_log = ROOT / '.worker' / 'openai-usage.jsonl'
 
     # Run the chain: transient provider error -> retry once -> next worker.
-    before = git_changes(ROOT)
+    before = git_snapshot(ROOT)
     start = time.monotonic()
     tried, res, changed = [], None, False
     for w in chain:
         for attempt in (1, 2):
             res = invoke_agy(w, ctx) if w['h'] == 'agy' else invoke_copilot(w, ctx)
             tried.append(f"{res['worker']}={res['code']}")
-            changed = any(c not in before for c in git_changes(ROOT))
+            # With --files, another worker's changes elsewhere don't count as this worker's.
+            changed = bool(split_scope(changed_since(before, git_snapshot(ROOT)), a.files)[0])
             transient = res['code'] == 6 and not changed and TRANSIENT.search(str(res.get('error') or ''))
             if not transient or attempt == 2:
                 break
@@ -655,14 +698,16 @@ def main(argv=None):
         if res['code'] == 0 and not check['passed']:
             res['code'] = 7
     res['check'] = check
-    after = git_changes(ROOT)
-    res.update({'role': a.role, 'seconds': int(time.monotonic() - start), 'tried': tried,
-                'files_changed': [c.strip() for c in after if c not in before]})
+    own, outside = split_scope(changed_since(before, git_snapshot(ROOT)), a.files)
+    run_file = f'.worker/run-{uuid.uuid4().hex[:8]}.json'   # one per run: parallel workers don't overwrite each other
+    res.update({'role': a.role, 'seconds': int(time.monotonic() - start), 'tried': tried, 'run_file': run_file,
+                'files_changed': [c.strip() for c in own], 'files_outside': [c.strip() for c in outside]})
     for k in ('conversation_id', 'response', 'error', 'input_tokens', 'cache_read_tokens', 'output_tokens', 'thinking_tokens'):
         res.setdefault(k, None)
 
     json_out = json.dumps(res, indent=2, ensure_ascii=False)
-    (ROOT / '.worker' / 'last.json').write_text(json_out, encoding='utf-8')
+    for f in (run_file, '.worker/last.json'):
+        (ROOT / f).write_text(json_out, encoding='utf-8')
     if a.json:
         print(json_out)
     else:
@@ -672,6 +717,8 @@ def main(argv=None):
         if len(tried) > 1:
             print('tried: ' + ', '.join(tried))
         print('files: ' + ('; '.join(res['files_changed']) or 'none'))
+        if res['files_outside']:
+            print('NOT IN --files (another worker, or this one broke its scope): ' + '; '.join(res['files_outside']))
         if check:
             print('check: ' + check_text(check) + (' | after 1 fix round' if check.get('fix_rounds') else ''))
             if check.get('passed') is False:
@@ -680,7 +727,7 @@ def main(argv=None):
             print('denied: ' + '; '.join(res['denied']))
         if res['error']:
             print(f"error: {res['error']}")
-        print(f"conversation: {none(res['conversation_id'])}")
+        print(f"conversation: {none(res['conversation_id'])} | saved: {run_file}")
         print('--- report ---')
         print(str(none(res['response'])).strip())
     return int(res['code'])

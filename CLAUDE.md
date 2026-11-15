@@ -68,7 +68,7 @@ Max 4 workers at once: 2 on agy + 1 NVIDIA + 1 Gemini API (fewer if `SETUP.md` h
 
 ## Running a worker (always from the project root)
 ```bash
-python agent/delegate.py --role builder --task-file .worker/t1.md --include src/shop.py
+python agent/delegate.py --role builder --task-file .worker/t1.md --part shop --files src/shop.py tests/test_shop.py --include src/shop.py
 ```
 - `--role <name>`: any file in `agent/roles/`. Default builder.
 - Force one worker (no chain, no fallback): `--model <agy model>` (`gemini-3.8-flash-low|-medium`, `claude-sonnet-4-6`,
@@ -76,12 +76,15 @@ python agent/delegate.py --role builder --task-file .worker/t1.md --include src/
 - `--part <name>`: fills `{name}` in `check_one`. Builder/tester: the script runs the check after the worker; if it
   fails the worker gets the output once to fix it, then the check runs again. Reviewer: the check runs first and its
   result is pasted into the task. `--no-check` skips it, `--no-fix` skips the fix round, `--check-timeout-sec` (default 300).
+- `--files <files or globs>`: what this task may change. Always give it when workers run in parallel: each run then
+  lists only its own files under `files:`, and everything else under `NOT IN --files` (another worker's files, or this
+  worker broke its scope: check which).
 - `--include <files>`: pastes files into the task with line numbers, so the worker doesn't spend calls opening them.
 - `--conversation <id>`: quick follow-up on a result (max 2, then do it yourself). `--json`: print the full JSON.
 - `--local`: Ollama, text only. `--timeout-sec` (default 480). `--no-sandbox`: only if the check must write outside this
   folder. `--no-agent`: agy with all its tools (debugging only).
 - Output: summary line (status, worker, time, calls, tokens), changed files, the check result, the worker's report. Full JSON in
-  `.worker/last.json`. Exit: 0 ok, 2 bad role/no task, 3 timeout, 4 blocked action, 5 empty, 6 provider error / refused / none available, 7 check still failing after the fix round.
+  `.worker/run-<id>.json` (named in the summary; `.worker/last.json` = the run that finished last). Exit: 0 ok, 2 bad role/no task, 3 timeout, 4 blocked action, 5 empty, 6 provider error / refused / none available, 7 check still failing after the fix round.
 - Workers take 1-8 minutes: run them in the background. Never `--dangerously-skip-permissions`.
 
 ## Writing a task (base rules, role rules and PROJECT notes are added automatically)
@@ -96,6 +99,7 @@ python agent/delegate.py --role builder --task-file .worker/t1.md --include src/
 
 ## Review (always, by you)
 - `git status` / diff: only the named files changed (check even after a timeout: files often exist).
+  With `--files`, the summary's `NOT IN --files` line already lists what fell outside.
 - The `check:` line in the summary is `check_one`, really run by the script: trust it over the worker's report.
 - Run `check_all` from `PROJECT.md`. If it is empty, read the result against the spec yourself.
 - Worker tests can be wrong: decide whether the test or the work is wrong.

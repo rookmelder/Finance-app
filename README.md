@@ -151,7 +151,7 @@ run their own check. On a test job this saved 38-59% of the tokens at the same q
 ## Running a worker yourself
 
 ```bash
-python agent/delegate.py --role builder --task-file .worker/t1.md --include src/shop.py
+python agent/delegate.py --role builder --task-file .worker/t1.md --part shop --files src/shop.py tests/test_shop.py --include src/shop.py
 ```
 
 - `--role` picks the role (any file in `agent/roles/`). `--include` pastes files into the task.
