@@ -10,8 +10,12 @@ Examples (from the project root; Windows, Linux and macOS):
 Roles: any agent/roles/<name>.md (frontmatter: base, models). Core rules per base: agent/bases/<base>.md.
 Each role has a worker chain; workers missing on this machine (SETUP.md) are skipped. On a transient
 provider error (429/503/no capacity) it retries once, then moves on. --model / --provider force one worker.
+Workers run no commands. For builder/tester roles this script runs check_one itself after the worker is done
+(--part fills {name}); when it fails, the worker gets the output once to fix it, then the check runs again.
+For reviewer roles the check runs first and its result is pasted into the task.
 Output: a short summary (full JSON saved in .worker/last.json); --json prints the JSON instead.
-Exit: 0 ok, 2 no task, 3 timeout (check git status: files often exist), 4 blocked, 5 empty, 6 provider error.
+Exit: 0 ok, 2 no task, 3 timeout (check git status: files often exist), 4 blocked, 5 empty, 6 provider error,
+7 check failed.
 Project settings (check commands, worker notes) come from PROJECT.md. Standard library only.
 """
 import argparse
@@ -57,7 +61,8 @@ OPENAI_FREE = {
 }
 OPENAI_RUN_CAP = {'big': 60000, 'mini': 400000}   # max tokens per single run (normal task: 15-75k)
 TRANSIENT = re.compile(r'429|503|UNAVAILABLE|RESOURCE_EXHAUSTED|capacity|rate limit|overloaded|timed out')
-LABELS = {0: 'OK', 3: 'TIMEOUT (check git status)', 4: 'BLOCKED', 5: 'EMPTY', 6: 'PROVIDER ERROR'}
+LABELS = {0: 'OK', 3: 'TIMEOUT (check git status)', 4: 'BLOCKED', 5: 'EMPTY', 6: 'PROVIDER ERROR', 7: 'CHECK FAILED'}
+CHECK_TAIL_LINES, CHECK_TAIL_CHARS = 60, 6000   # how much check output a worker / the summary gets
 
 
 class Fail(Exception):
@@ -167,31 +172,60 @@ def is_available(w, available):
     return bool(available.get('agy' if w['h'] == 'agy' else w['p']))
 
 
-def copilot_tools(base, check_stem, check_dir, windows=IS_WIN):
+def copilot_tools(base, check_dir):
     """Copilot tools per role: only what the role needs (each tool definition is resent on every call).
-    No check command in PROJECT.md = no shell tool at all."""
-    sh = [f'shell({check_stem}:*)'] if check_stem else []
-    shell_tools = (',powershell,read_powershell' if windows else ',bash,read_bash') if check_stem else ''
+    No worker gets a shell tool: this script runs the check command itself."""
     tester_write = f'write({check_dir}/**)' if check_dir else 'write'
     return {
-        'builder': {'tools': f'view,create,edit,grep,glob{shell_tools}', 'allow': ['write'] + sh},
-        'tester': {'tools': f'view,create,edit,grep,glob{shell_tools}', 'allow': [tester_write] + sh},
+        'builder': {'tools': 'view,create,edit,grep,glob', 'allow': ['write']},
+        'tester': {'tools': 'view,create,edit,grep,glob', 'allow': [tester_write]},
         'scribe': {'tools': 'view,create,edit,grep,glob', 'allow': ['write(**/*.md)']},
-        'reviewer': {'tools': f'view,grep,glob{shell_tools}', 'allow': sh},
+        'reviewer': {'tools': 'view,grep,glob', 'allow': []},
     }[base]
 
 
-def build_prompt(task, base, role, role_body, rules, proj, notes, includes, conversation):
+def check_command(check_one, part):
+    """check_one with {name} filled in -> (command, ''), or (None, why it can't run)."""
+    cmd = (check_one or '').strip()
+    if not cmd:
+        return None, 'no check command in PROJECT.md'
+    if '{name}' in cmd:
+        if not part:
+            return None, 'give --part <name> to fill {name} in check_one'
+        cmd = cmd.replace('{name}', part)
+    return cmd, ''
+
+
+def check_text(check):
+    """A check result as text for a worker or the summary."""
+    if check.get('skipped'):
+        return f"not run ({check['skipped']})"
+    head = 'PASS' if check['passed'] else ('FAIL: timed out' if check['timed_out'] else f"FAIL (exit {check['exit']})")
+    return f"{head} | `{check['cmd']}`"
+
+
+def fix_prompt(base, check):
+    who = ('If a test is wrong, fix the test. If the work itself is wrong, change nothing and list it under Failures.'
+           if base == 'tester' else 'Fix the real cause, only in the files your task names.')
+    return (f"The Lead's script ran the check on your part: {check_text(check)}\n\nOutput (last lines):\n```\n{check['output']}\n```\n\n"
+            f'{who} Run no commands: the check runs again after you. End with the report.')
+
+
+def build_prompt(task, base, role, role_body, rules, proj, notes, includes, conversation, check=None):
     if not conversation:
         if role_body:
             rules += f'\n## Your role: {role}\n{role_body}\n'
-        if base == 'scribe':
-            check = 'Run no commands.'
-        elif proj['check_one']:
-            check = f"Check command (the ONLY command you may run, for your own part; {{name}} = your part): `{proj['check_one']}`"
+        if base == 'reviewer' and check and not check.get('skipped'):
+            how = (f"Run no commands. The Lead's script just ran the check: {check_text(check)}\n"
+                   f"Output (last lines):\n```\n{check['output']}\n```")
+        elif base in ('builder', 'tester') and proj['check_one']:
+            how = ("Run no commands. When you are done, the Lead's script runs the check on your part "
+                   f"(`{proj['check_one']}`). If it fails you get the output once to fix it.")
+        elif base == 'builder':
+            how = 'This project has no check command: run no commands. Re-read your files against the spec instead.'
         else:
-            check = 'This project has no check command: run no commands. Re-read your files against the spec instead.'
-        task = rules + f"\n---\n# PROJECT\n{check}{chr(10) + notes if notes else ''}\n\n---\n# YOUR TASK\n\n" + task
+            how = 'Run no commands.'
+        task = rules + f"\n---\n# PROJECT\n{how}{chr(10) + notes if notes else ''}\n\n---\n# YOUR TASK\n\n" + task
     for f in includes:
         lines = read_text(f).splitlines()
         body = '\n'.join(f'{n:>4}  {line}' for n, line in enumerate(lines, 1))
@@ -230,6 +264,19 @@ def run_tool(args, *, stdin_bytes=None, env=None, timeout=None, watch=None, keep
     exe = shutil.which(args[0])
     if not exe:
         raise Fail(f'{args[0]} not found on PATH (installed just now? restart the terminal/app).', 3)
+    text, why, _ = _run([exe] + args[1:], stdin_bytes=stdin_bytes, env=env, timeout=timeout, watch=watch, keep_stderr=keep_stderr)
+    return text, why
+
+
+def run_check(cmd, timeout):
+    """Run the project's check command (a shell line from PROJECT.md) in the project root."""
+    text, why, rc = _run(cmd, shell=True, timeout=timeout)
+    tail = '\n'.join(text.strip().splitlines()[-CHECK_TAIL_LINES:])[-CHECK_TAIL_CHARS:]
+    return {'cmd': cmd, 'passed': rc == 0 and not why, 'exit': rc, 'timed_out': why == 'timeout', 'output': tail, 'fix_rounds': 0}
+
+
+def _run(cmd, *, shell=False, stdin_bytes=None, env=None, timeout=None, watch=None, keep_stderr=True):
+    """Returns (output text, 'timeout' | 'stopped' | None, exit code)."""
     out_f = tempfile.TemporaryFile()
     in_f = None
     if stdin_bytes is not None:
@@ -237,7 +284,7 @@ def run_tool(args, *, stdin_bytes=None, env=None, timeout=None, watch=None, keep
         in_f.write(stdin_bytes)
         in_f.seek(0)
     kw = {} if IS_WIN else {'start_new_session': True}
-    proc = subprocess.Popen([exe] + args[1:], stdin=in_f or subprocess.DEVNULL, stdout=out_f,
+    proc = subprocess.Popen(cmd, shell=shell, stdin=in_f or subprocess.DEVNULL, stdout=out_f,
                             stderr=subprocess.STDOUT if keep_stderr else subprocess.DEVNULL, env=env, cwd=str(ROOT), **kw)
     start = time.monotonic()
     why = None
@@ -259,7 +306,7 @@ def run_tool(args, *, stdin_bytes=None, env=None, timeout=None, watch=None, keep
     out_f.close()
     if in_f:
         in_f.close()
-    return text, why
+    return text, why, proc.returncode
 
 
 # --- agy -----------------------------------------------------------------------------------------
@@ -301,8 +348,7 @@ def invoke_agy(w, ctx):
     a = ctx.args
     prompt = ctx.task
     if ctx.base in ('builder', 'tester'):
-        prompt += (f"\n\nREMINDER: only command allowed: '{ctx.proj['check_one']}' for your own part. Run it max 2x. End with the report."
-                   if ctx.proj['check_one'] else '\n\nREMINDER: run no commands. End with the report.')
+        prompt += '\n\nREMINDER: run no commands. End with the report.'
     cmd = ['agy', '--input-format', 'stream-json', '--output-format', 'stream-json', '--model', w['m'],
            '--print-timeout', f'{a.timeout_sec}s', '--mode', 'accept-edits']
     if not a.no_agent:
@@ -424,7 +470,7 @@ def invoke_copilot(w, ctx):
     if w['p'] == 'openai':
         env['COPILOT_PROVIDER_WIRE_API'] = 'responses' if re.match(r'^(gpt-5|o\d)', model) else 'completions'
 
-    t = copilot_tools(ctx.base, ctx.check_stem, ctx.proj['check_dir'])
+    t = copilot_tools(ctx.base, ctx.proj['check_dir'])
     log_dir = Path(tempfile.gettempdir()) / f'cp-log-{uuid.uuid4()}'
     cmd = ['copilot', '-p', ctx.task, '--output-format', 'json', '--no-color', '--no-ask-user', '--no-custom-instructions',
            '--disable-builtin-mcps', '--disable-mcp-server', 'ddg-search',
@@ -486,6 +532,10 @@ def parse_args(argv):
     ap.add_argument('--openrouter', metavar='ID', help='shortcut: --provider openrouter --provider-model ID')
     ap.add_argument('--conversation', help='follow-up on an earlier result (max 2)')
     ap.add_argument('--schema', help='agy: JSON schema file for the final result')
+    ap.add_argument('--part', metavar='NAME', help='the part this task is about: fills {name} in check_one')
+    ap.add_argument('--no-check', action='store_true', help='do not run check_one for this task')
+    ap.add_argument('--no-fix', action='store_true', help='run the check, but do not send a failure back to the worker')
+    ap.add_argument('--check-timeout-sec', type=int, default=300)
     ap.add_argument('--timeout-sec', type=int, default=480)
     ap.add_argument('--no-sandbox', action='store_true', help='only if the check must write outside this folder')
     ap.add_argument('--no-agent', action='store_true', help='agy: full default tool set (debugging only)')
@@ -509,7 +559,8 @@ def main(argv=None):
     proj, notes, private = {'check_one': '', 'check_all': '', 'check_dir': ''}, '', False
     if (ROOT / 'PROJECT.md').exists():
         proj, notes, private = parse_project(read_text(ROOT / 'PROJECT.md'))
-    check_stem = proj['check_one'].split()[0] if proj['check_one'].strip() else ''   # Copilot matches the first word only
+    if a.part and not re.fullmatch(r'[\w./\\-]+', a.part):   # it becomes part of a shell line
+        raise Fail(f"--part '{a.part}': only letters, digits and _ . / - are allowed.", 2)
 
     role_file = AGENT_DIR / 'roles' / f'{a.role}.md'
     if not role_file.exists():
@@ -540,7 +591,15 @@ def main(argv=None):
     if not task:
         raise Fail('Give --task "..." or --task-file <path>.', 2)
     rules = read_text(AGENT_DIR / 'bases' / f'{base}.md')
-    task = build_prompt(task, base, a.role, role_body, rules, proj, notes, a.include, a.conversation)
+
+    # The check is run here, never by a worker. Reviewer: before, so it can read the result.
+    check = None
+    check_cmd, why_not = (None, '') if a.no_check or a.local or base == 'scribe' else check_command(proj['check_one'], a.part)
+    if why_not and proj['check_one'].strip():
+        check = {'skipped': why_not}
+    if check_cmd and base == 'reviewer' and not a.conversation:
+        check = run_check(check_cmd, a.check_timeout_sec)
+    task = build_prompt(task, base, a.role, role_body, rules, proj, notes, a.include, a.conversation, check)
 
     if a.local:   # local Ollama, text only
         if not shutil.which('ollama'):
@@ -557,7 +616,7 @@ def main(argv=None):
         return 0
 
     ctx = Ctx()
-    ctx.args, ctx.task, ctx.base, ctx.proj, ctx.check_stem = a, task, base, proj, check_stem
+    ctx.args, ctx.task, ctx.base, ctx.proj = a, task, base, proj
     ctx.openai_log = ROOT / '.worker' / 'openai-usage.jsonl'
 
     # Run the chain: transient provider error -> retry once -> next worker.
@@ -575,6 +634,27 @@ def main(argv=None):
             time.sleep(20)
         if res['code'] != 6 or changed:
             break
+
+    # Builder/tester: run the check now; on failure the same worker gets the output once, then it runs again.
+    if check_cmd and base in ('builder', 'tester') and res['code'] in (0, 3):
+        check = run_check(check_cmd, a.check_timeout_sec)
+        if not check['passed'] and res['code'] == 0 and res.get('conversation_id') and not a.no_fix:
+            a.conversation, ctx.task = res['conversation_id'], fix_prompt(base, check)
+            fix = invoke_agy(w, ctx) if w['h'] == 'agy' else invoke_copilot(w, ctx)
+            tried.append(f"{fix['worker']}=fix:{fix['code']}")
+            for k in ('calls', 'input_tokens', 'cache_read_tokens', 'output_tokens', 'thinking_tokens'):
+                if isinstance(res.get(k), int) and isinstance(fix.get(k), int):
+                    res[k] += fix[k]
+            res['denied'] = (res.get('denied') or []) + (fix.get('denied') or [])
+            if fix.get('response'):
+                res['response'] = fix['response']
+            if fix['code'] != 0:
+                res['error'] = f"fix round ended with {LABELS.get(fix['code'], fix['code'])}: {fix.get('error') or ''}".strip()
+            check = run_check(check_cmd, a.check_timeout_sec)
+            check['fix_rounds'] = 1
+        if res['code'] == 0 and not check['passed']:
+            res['code'] = 7
+    res['check'] = check
     after = git_changes(ROOT)
     res.update({'role': a.role, 'seconds': int(time.monotonic() - start), 'tried': tried,
                 'files_changed': [c.strip() for c in after if c not in before]})
@@ -592,6 +672,10 @@ def main(argv=None):
         if len(tried) > 1:
             print('tried: ' + ', '.join(tried))
         print('files: ' + ('; '.join(res['files_changed']) or 'none'))
+        if check:
+            print('check: ' + check_text(check) + (' | after 1 fix round' if check.get('fix_rounds') else ''))
+            if check.get('passed') is False:
+                print(check['output'])
         if res['denied']:
             print('denied: ' + '; '.join(res['denied']))
         if res['error']:

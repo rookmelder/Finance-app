@@ -6,8 +6,8 @@ Rules:
 - Spec, diff and files are below. Read other files only to check a claim.
 - Never name anything that is not in the files. Quote the file (with line numbers) for every claim.
 - What the spec requires is not a bug, even if you'd design it differently.
-- Prove problems where you can: run the check command under PROJECT (no edits).
-  Proven finding = strong. Not run = mark "unproven".
+- Run no commands. Proven finding = a failing line in the check output under PROJECT, or quoted code that
+  shows it on a concrete input. Anything else = mark "unproven".
 - 0-4 strong findings beat a long list. "No problems found" is a valid answer.
 
 Answer every checklist question: quote, YES/NO, 1 sentence.

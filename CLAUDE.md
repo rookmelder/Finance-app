@@ -30,8 +30,6 @@ Works for any project: software, games, research, automation, writing.
    reviewer, scribe), pack roles, and new ones from `templates/roles/ROLE-TEMPLATE.md`. Say in one line each what
    it does and which models it uses. After the user's OK, copy/create them in `agent/roles/` and delete unused defaults only if the user wants.
 5. **Project.** Fill in `PROJECT.md` (about, settings, worker notes) and remove its "NOT FILLED IN YET" line.
-   If the check command isn't Python unittest, agy workers need an allow-rule for it (`agent/setup/agy.md`):
-   ask the user before changing that global file.
 6. **Repo.** The project's files live inside this folder (e.g. `src/`, `design/`): `delegate.py` uses this
    folder's git status to see what a worker changed. If `origin` still points at the template repo, ask the user
    for the project's own repo URL.
@@ -49,8 +47,8 @@ models: agy:gemini-3.8-flash-low, nvidia:mistralai/mistral-large-4-1t-a52b, open
 does: one line
 ---
 ```
-- **base** sets tools and core rules: builder makes/changes files and may run `check_one`; tester writes tests only in
-  `check_dir`; reviewer only reads; scribe writes `*.md` only and runs nothing.
+- **base** sets tools and core rules: builder makes/changes files; tester writes tests only in `check_dir`; reviewer
+  only reads; scribe writes `*.md` only. No worker runs commands: `delegate.py` runs `check_one` itself.
 - **models** is the chain, first = main. Workers marked "no" in `SETUP.md` are skipped; on busy/quota errors the next one runs.
 - Default roles: **builder** (one piece + its tests), **builderplus** (multi-file, tricky), **tester** (tests for work
   it didn't make), **reviewer** (checklist review, proves problems), **scribe** (docs).
@@ -75,26 +73,30 @@ python agent/delegate.py --role builder --task-file .worker/t1.md --include src/
 - `--role <name>`: any file in `agent/roles/`. Default builder.
 - Force one worker (no chain, no fallback): `--model <agy model>` (`gemini-3.8-flash-low|-medium`, `claude-sonnet-4-6`,
   `gpt-oss-120b-medium`), or `--provider nvidia|gemini|openrouter|openai [--provider-model <id>]`, or `--openrouter <id>`.
+- `--part <name>`: fills `{name}` in `check_one`. Builder/tester: the script runs the check after the worker; if it
+  fails the worker gets the output once to fix it, then the check runs again. Reviewer: the check runs first and its
+  result is pasted into the task. `--no-check` skips it, `--no-fix` skips the fix round, `--check-timeout-sec` (default 300).
 - `--include <files>`: pastes files into the task with line numbers, so the worker doesn't spend calls opening them.
 - `--conversation <id>`: quick follow-up on a result (max 2, then do it yourself). `--json`: print the full JSON.
 - `--local`: Ollama, text only. `--timeout-sec` (default 480). `--no-sandbox`: only if the check must write outside this
   folder. `--no-agent`: agy with all its tools (debugging only).
-- Output: summary line (status, worker, time, calls, tokens), changed files, the worker's report. Full JSON in
-  `.worker/last.json`. Exit: 0 ok, 2 bad role/no task, 3 timeout, 4 blocked action, 5 empty, 6 provider error / refused / none available.
+- Output: summary line (status, worker, time, calls, tokens), changed files, the check result, the worker's report. Full JSON in
+  `.worker/last.json`. Exit: 0 ok, 2 bad role/no task, 3 timeout, 4 blocked action, 5 empty, 6 provider error / refused / none available, 7 check still failing after the fix round.
 - Workers take 1-8 minutes: run them in the background. Never `--dangerously-skip-permissions`.
 
 ## Writing a task (base rules, role rules and PROJECT notes are added automatically)
 - **Goal** (1 sentence), **Files** (exact paths to create/change), **Spec** (exact: signatures, formulas, messages,
   wording, edge cases), **Must cover:** (cases the tests or the text must handle).
 - Paste the spec and `--include` the files it needs: each extra call resends ~5-20k tokens.
-- **Create new folders yourself before delegating**: workers can't make folders (no shell when there is no check command).
-- Name the part for the check command: "Your part: shop" (fills `{name}` in `check_one`).
+- **Create new folders yourself before delegating**: workers can't make folders (they have no shell).
+- Name the part with `--part shop` (fills `{name}` in `check_one`); without it a `{name}` check is not run.
 - Exact and complete; never vague about behaviour. Never "Done when: tests pass" (workers loop); write "Must cover: ...".
 - Reviewer task: the checklist is in its rules. Add 2-4 questions about the riskiest part, paste the spec section
   and the diff, and `--include` each changed file.
 
 ## Review (always, by you)
 - `git status` / diff: only the named files changed (check even after a timeout: files often exist).
+- The `check:` line in the summary is `check_one`, really run by the script: trust it over the worker's report.
 - Run `check_all` from `PROJECT.md`. If it is empty, read the result against the spec yourself.
 - Worker tests can be wrong: decide whether the test or the work is wrong.
 - Reviewer findings are often wrong: verify each before acting. Fact-check every number a scribe writes.
@@ -109,8 +111,7 @@ python agent/delegate.py --role builder --task-file .worker/t1.md --include src/
 ## Gotchas
 - agy loads `AGENTS.md` / `GEMINI.md` into every worker as rules: never create them here.
 - agy plan mode (`--mode plan`) makes workers write plans and wait: never use it for workers.
-- Copilot allow-rules match only the command's first word: `check_one` = `python ...` allows any `python` command.
-- Linux/macOS: same commands (`python3` if `python` is missing). There Copilot's shell tool is `bash,read_bash`
-  instead of `powershell,read_powershell` (`delegate.py` picks it); not yet tested on a real Linux machine.
+- The check command runs outside the worker sandbox, as you: it comes from `PROJECT.md`, never from a worker.
+- Linux/macOS: same commands (`python3` if `python` is missing, also inside `check_one`); not yet tested on a real Linux machine.
 - Tests for the scripts themselves: `python -m unittest discover -s agent/tests`.
 - `agy` or `copilot` not found right after installing: the shell's PATH is stale; tell the user to restart the app.

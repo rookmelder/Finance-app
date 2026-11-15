@@ -7,10 +7,10 @@ does: One line: what this role makes or checks.
 
 FRONTMATTER
 - base: what kind of worker this is. It sets the worker's tools, sandbox and core rules (agent/bases/<base>.md):
-    builder  = makes or changes files (code, text, data); may run the project's check command
+    builder  = makes or changes files (code, text, data); delegate.py runs the check command on its part
     tester   = writes tests/checks for work it did not make; may only write in check_dir
     reviewer = reads and reports; never edits anything
-    scribe   = writes markdown docs only; runs no commands
+    scribe   = writes markdown docs only
 - models: the worker chain, first = main, the rest are fallbacks. Leave the line out to use the base's default.
     agy:<model>        gemini-3.8-flash-low, gemini-3.8-flash-medium, claude-sonnet-4-6 (reviewers only), gpt-oss-120b-medium
     <provider>:<id>    nvidia, gemini, openrouter, openai (openai: reviewer roles only)

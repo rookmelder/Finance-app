@@ -26,7 +26,6 @@ Worker notes to consider: language version and allowed libraries; folder layout;
 ## Pitfalls
 - Secrets: never in code or tests; read from environment. The Lead writes security-sensitive code itself.
 - Workers love to "improve" nearby code: name the exact files in every task.
-- Agy workers can only run allowed commands: add the stack's check command to agy's settings (see agent/setup/agy.md).
 
 ## Roles in this pack
 - `security-reviewer`: checks a change for security problems.

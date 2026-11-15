@@ -79,13 +79,106 @@ class Prompt(unittest.TestCase):
         self.assertIn('no check command', d.build_prompt('T', 'builder', 'b', '', 'R', proj, '', [], None))
         self.assertEqual(d.build_prompt('T', 'builder', 'b', '', 'R', proj, '', [], 'conv1'), 'T')
 
-    def test_copilot_tools(self):
-        self.assertEqual(d.copilot_tools('scribe', 'python', '', windows=False)['allow'], ['write(**/*.md)'])
-        t = d.copilot_tools('tester', 'python', 'tests', windows=False)
-        self.assertEqual(t['tools'], 'view,create,edit,grep,glob,bash,read_bash')
-        self.assertEqual(t['allow'], ['write(tests/**)', 'shell(python:*)'])
-        self.assertIn('powershell', d.copilot_tools('builder', 'python', '', windows=True)['tools'])
-        self.assertEqual(d.copilot_tools('reviewer', '', '', windows=True), {'tools': 'view,grep,glob', 'allow': []})
+    def test_copilot_tools_have_no_shell(self):
+        self.assertEqual(d.copilot_tools('scribe', '')['allow'], ['write(**/*.md)'])
+        self.assertEqual(d.copilot_tools('tester', 'tests'), {'tools': 'view,create,edit,grep,glob', 'allow': ['write(tests/**)']})
+        self.assertEqual(d.copilot_tools('builder', ''), {'tools': 'view,create,edit,grep,glob', 'allow': ['write']})
+        self.assertEqual(d.copilot_tools('reviewer', 'tests'), {'tools': 'view,grep,glob', 'allow': []})
+
+    def test_reviewer_gets_check_result(self):
+        proj = {'check_one': 'x {name}', 'check_all': '', 'check_dir': ''}
+        check = {'cmd': 'x shop', 'passed': False, 'exit': 1, 'timed_out': False, 'output': 'AssertionError: 3 != 4'}
+        p = d.build_prompt('T', 'reviewer', 'r', '', 'R', proj, '', [], None, check)
+        self.assertIn('FAIL (exit 1) | `x shop`', p)
+        self.assertIn('AssertionError: 3 != 4', p)
+        self.assertNotIn('`x shop`', d.build_prompt('T', 'reviewer', 'r', '', 'R', proj, '', [], None, {'skipped': 'why'}))
+
+
+class Check(unittest.TestCase):
+    def test_check_command(self):
+        self.assertEqual(d.check_command('test {name} -v', 'shop'), ('test shop -v', ''))
+        self.assertEqual(d.check_command('test all', None), ('test all', ''))
+        self.assertIsNone(d.check_command('', 'shop')[0])
+        cmd, why = d.check_command('test {name}', None)
+        self.assertIsNone(cmd)
+        self.assertIn('--part', why)
+
+    def test_run_check(self):
+        ok = d.run_check('python -c "print(1)"', 60)
+        self.assertEqual((ok['passed'], ok['exit'], ok['output']), (True, 0, '1'))
+        bad = d.run_check('python -c "import sys; [print(i) for i in range(200)]; sys.exit(3)"', 60)
+        self.assertEqual((bad['passed'], bad['exit'], bad['timed_out']), (False, 3, False))
+        self.assertEqual(bad['output'].splitlines()[0], str(200 - d.CHECK_TAIL_LINES))
+        self.assertIn('FAIL (exit 3)', d.check_text(bad))
+        slow = d.run_check('python -c "import time; time.sleep(30)"', 1)
+        self.assertEqual((slow['passed'], slow['timed_out']), (False, True))
+
+    def test_fix_prompt(self):
+        check = {'cmd': 'c', 'passed': False, 'exit': 1, 'timed_out': False, 'output': 'boom'}
+        self.assertIn('boom', d.fix_prompt('builder', check))
+        self.assertIn('change nothing', d.fix_prompt('tester', check))
+
+    def run_main(self, fake, extra=()):
+        """main() in a temp project whose check passes once ok.txt exists; the worker is faked."""
+        import contextlib
+        import io
+        old = (d.ROOT, d.invoke_agy, os.getcwd())
+        with tempfile.TemporaryDirectory() as t:
+            Path(t, 'PROJECT.md').write_text(
+                '```settings\ncheck_one: python -c "import os,sys; sys.exit(0 if os.path.exists(\'{name}.txt\') else 1)"\n```\n',
+                encoding='utf-8')
+            d.ROOT, d.invoke_agy = Path(t), fake
+            out = io.StringIO()
+            try:
+                with contextlib.redirect_stdout(out):
+                    code = d.main(['--model', 'gemini-3.8-flash-low', '--task', 'x', *extra])
+                last = json.loads(Path(t, '.worker', 'last.json').read_text(encoding='utf-8'))
+            finally:
+                os.chdir(old[2])
+                d.ROOT, d.invoke_agy = old[0], old[1]
+        return code, last, out.getvalue()
+
+    def test_failed_check_goes_back_to_the_worker_once(self):
+        prompts = []
+
+        def fake(w, ctx):
+            prompts.append(ctx.task)
+            if len(prompts) == 2:   # the fix round
+                Path(d.ROOT, 'ok.txt').write_text('x', encoding='utf-8')
+            return {'worker': 'agy fake', 'code': 0, 'conversation_id': 'c1', 'response': f'report {len(prompts)}',
+                    'calls': '?', 'input_tokens': 10, 'output_tokens': 1, 'denied': []}
+
+        code, last, out = self.run_main(fake, ['--part', 'ok'])
+        self.assertEqual(code, 0)
+        self.assertEqual(len(prompts), 2)
+        self.assertIn('FAIL (exit 1)', prompts[1])
+        self.assertEqual((last['check']['passed'], last['check']['fix_rounds'], last['input_tokens'], last['response']),
+                         (True, 1, 20, 'report 2'))
+        self.assertIn('check: PASS', out)
+        self.assertIn('after 1 fix round', out)
+
+    def test_check_still_failing_is_exit_7(self):
+        calls = []
+
+        def fake(w, ctx):
+            calls.append(1)
+            return {'worker': 'agy fake', 'code': 0, 'conversation_id': 'c1', 'response': 'r', 'calls': '?', 'denied': []}
+
+        code, last, out = self.run_main(fake, ['--part', 'ok'])
+        self.assertEqual((code, len(calls)), (7, 2))
+        self.assertIn('[CHECK FAILED]', out)
+        code, last, _ = self.run_main(fake, ['--part', 'ok', '--no-fix'])
+        self.assertEqual((code, len(calls)), (7, 3))
+        code, last, out = self.run_main(fake)   # no --part: {name} can't be filled, so no check
+        self.assertEqual(code, 0)
+        self.assertIn('check: not run', out)
+        code, last, _ = self.run_main(fake, ['--part', 'ok', '--no-check'])
+        self.assertEqual((code, last['check']), (0, None))
+
+    def test_bad_part_refused(self):
+        with self.assertRaises(d.Fail) as e:
+            d.main(['--task', 'x', '--part', 'a; rm -rf .'])
+        self.assertEqual(e.exception.code, 2)
 
 
 class Results(unittest.TestCase):

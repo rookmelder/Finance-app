@@ -51,10 +51,12 @@ Every role is one small file in `agent/roles/`. It says:
 - its **base**: what kind of worker it is, which decides what it is allowed to do:
   | Base | Allowed to |
   |---|---|
-  | builder | make and change files, run the project's check command |
-  | tester | write tests/checks (only in the test folder), run the check command |
+  | builder | make and change files |
+  | tester | write tests/checks (only in the test folder) |
   | reviewer | read only, never change anything |
-  | scribe | write documents (`.md`) only, run nothing |
+  | scribe | write documents (`.md`) only |
+
+  No worker can run commands. `delegate.py` runs the project's check command itself.
 - its **models**: first choice, then fallbacks if that one is busy or out of quota;
 - its **own rules**: a few lines about what's special about the job.
 
@@ -91,8 +93,9 @@ Each pack says what a good goal should cover, how to check the work, how to spli
 1. Claude writes a short task: the goal, which files, the exact spec, what must be covered.
 2. `delegate.py` adds the role's rules and the notes from `PROJECT.md`, and pastes in the files the worker needs.
 3. It starts the worker with **only the tools its role allows**, inside a **sandbox**: it can't touch anything outside
-   the project, can't use git, can't browse the web. The only command it may run is the project's check command.
-4. The worker does its piece, checks it, and ends with a short report.
+   the project, can't use git, can't browse the web, can't run commands.
+4. The worker does its piece and ends with a short report. Then `delegate.py` runs the project's check command on
+   that piece. If it fails, the worker gets the output once to fix it, and the check runs again.
 5. Claude checks: did it only touch the allowed files? Does the full check pass? Is the work right?
    Then Claude fixes, asks a reviewer, and commits.
 
