@@ -10,9 +10,11 @@ Examples (from the project root; Windows, Linux and macOS):
 Roles: any agent/roles/<name>.md (frontmatter: base, models). Core rules per base: agent/bases/<base>.md.
 Each role has a worker chain; workers missing on this machine (SETUP.md) are skipped. On a transient
 provider error (429/503/no capacity) it retries once, then moves on. --model / --provider force one worker.
+Models, providers and limits live in agent/models.json.
 Workers run no commands. For builder/tester roles this script runs check_one itself after the worker is done
 (--part fills {name}); when it fails, the worker gets the output once to fix it, then the check runs again.
 For reviewer roles the check runs first and its result is pasted into the task.
+A reviewer with --include (or a scribe writing one .md file) on an API model runs as ONE plain API call: no harness, no tools.
 --files names what the task may change: with workers in parallel, each run then reports only its own files.
 Output: a short summary (full JSON saved in .worker/run-<id>.json and .worker/last.json); --json prints the JSON instead.
 Exit: 0 ok, 2 no task, 3 timeout (check git status: files often exist), 4 blocked, 5 empty, 6 provider error,
@@ -33,6 +35,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -40,29 +44,15 @@ AGENT_DIR = Path(__file__).resolve().parent      # agent/: this script, bases/, 
 ROOT = AGENT_DIR.parent                           # project root: workers work here
 IS_WIN = os.name == 'nt'
 
-AGY_MODELS = ['gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-high', 'gpt-oss-120b-medium', 'claude-sonnet-4-6']
+CONFIG = json.loads((AGENT_DIR / 'models.json').read_text(encoding='utf-8-sig'))   # models, providers, limits: edit that file
+_plain = lambda d: {k: v for k, v in d.items() if not k.startswith('_')}
+AGY_MODELS = CONFIG['agy_models']
 BASES = ('builder', 'tester', 'reviewer', 'scribe')
-DEFAULT_MODELS = {   # used when a role file has no models: line
-    'builder': 'agy:gemini-3.8-flash-low, nvidia, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free',
-    'tester': 'gemini, nvidia, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free',
-    'reviewer': 'agy:claude-sonnet-4-6, openai:o3, agy:gpt-oss-120b-medium',
-    'scribe': 'nvidia:nvidia/nemotron-3.5-lightning-30b-a3b, agy:gemini-3.8-flash-low, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free',
-}
-PROVIDERS = {
-    'openrouter': {'url': 'https://openrouter.ai/api/v1', 'key': 'OPENROUTER_API_KEY', 'model': 'openrouter/free'},
-    'nvidia': {'url': 'https://integrate.api.nvidia.com/v1', 'key': 'NVIDIA_API_KEY', 'model': 'mistralai/mistral-large-4-1t-a52b'},
-    'gemini': {'url': 'https://generativelanguage.googleapis.com/v1beta/openai/', 'key': 'GEMINI_API_KEY', 'model': 'gemini-flash-lite-latest'},
-    # OpenAI: free daily tokens only for listed models with data sharing on (see MODELS.md). GPT-5 uses the responses API.
-    'openai': {'url': 'https://api.openai.com/v1', 'key': 'OPENAI_API_KEY', 'model': 'gpt-5.4-mini'},
-}
-# OpenAI complimentary daily tokens (data sharing on): only these models, only up to these limits.
-# Anything else is billed from the prepaid credit, so it is refused here. Reset: 00:00 UTC.
-OPENAI_FREE = {
-    'big': {'limit': 250000, 'models': ['gpt-5.4', 'gpt-5.2', 'gpt-5.1', 'gpt-5', 'gpt-4.1', 'gpt-4o', 'o1', 'o3']},
-    'mini': {'limit': 2500000, 'models': ['gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-5-mini', 'gpt-5-nano', 'gpt-4.1-mini',
-                                          'gpt-4.1-nano', 'gpt-4o-mini', 'o3-mini', 'o4-mini']},
-}
-OPENAI_RUN_CAP = {'big': 60000, 'mini': 400000}   # max tokens per single run (normal task: 15-75k)
+DEFAULT_MODELS = _plain(CONFIG['default_models'])      # used when a role file has no models: line
+PROVIDERS = _plain(CONFIG['providers'])                # OpenAI-compatible APIs: url, key name, default model
+OPENAI_FREE = _plain(CONFIG['openai_free'])            # free daily tokens: only these models, up to these limits
+OPENAI_RUN_CAP = _plain(CONFIG['openai_run_cap'])      # max tokens per single run
+MAX_CALLS = int(CONFIG.get('max_calls') or 40)         # Copilot workers: stop a run after this many model calls
 TRANSIENT = re.compile(r'429|503|UNAVAILABLE|RESOURCE_EXHAUSTED|capacity|rate limit|overloaded|timed out')
 LABELS = {0: 'OK', 3: 'TIMEOUT (check git status)', 4: 'BLOCKED', 5: 'EMPTY', 6: 'PROVIDER ERROR', 7: 'CHECK FAILED'}
 CHECK_TAIL_LINES, CHECK_TAIL_CHARS = 60, 6000   # how much check output a worker / the summary gets
@@ -116,7 +106,7 @@ def windows_user_env(name):
 
 def parse_project(text):
     """PROJECT.md: the ```settings block, the '## Worker notes' section and the Private flag."""
-    proj = {'check_one': '', 'check_all': '', 'check_dir': ''}
+    proj = {'check_one': '', 'check_all': '', 'check_dir': '', 'private': ''}
     m = re.search(r'```settings\s*\r?\n(.*?)```', text, re.S)
     if m:
         for line in re.split(r'\r?\n', m.group(1)):
@@ -129,7 +119,13 @@ def parse_project(text):
         notes = m.group(1).strip()
     if notes.startswith('- <'):   # template placeholder, not filled in
         notes = ''
-    private = bool(re.search(r'\*\*Private\?\*\*\s*yes', text))   # private: only agy (and --local)
+    # Private = only agy (and --local). Anything but a clear "no" counts as private, so a typo never opens the cloud.
+    val = proj.get('private', '').lower()
+    if val in ('yes', 'no'):
+        private = val == 'yes'
+    else:   # older PROJECT.md: the "**Private?** yes/no" line under About
+        old = re.search(r'\*\*Private\?\*\*\s*(yes|no)\b', text)
+        private = not (old and old.group(1) == 'no')
     return proj, notes, private
 
 
@@ -172,7 +168,10 @@ def parse_available(text):
 def is_available(w, available):
     if available is None:
         return True
-    return bool(available.get('agy' if w['h'] == 'agy' else w['p']))
+    name = 'agy' if w['h'] == 'agy' else w['p']
+    if name not in available and name in PROVIDERS:   # added in models.json, unknown to check_setup.py
+        return bool(os.environ.get(PROVIDERS[name]['key']))
+    return bool(available.get(name))
 
 
 def copilot_tools(base, check_dir):
@@ -349,6 +348,56 @@ def _run(cmd, *, shell=False, stdin_bytes=None, env=None, timeout=None, watch=No
     return text, why, proc.returncode
 
 
+def direct_mode(base, a):
+    """Can this task run as ONE plain API call, without a harness? (API workers only; agy always uses its CLI.)
+    Reviewer: when the files it must judge are pasted in with --include.
+    Scribe: when --files names exactly one .md file that is new or pasted in with --include."""
+    if a.no_direct or a.conversation or a.local:
+        return False
+    if base == 'reviewer':
+        return bool(a.include)
+    if base == 'scribe' and len(a.files) == 1 and a.files[0].endswith('.md') and not re.search(r'[*?\[]', a.files[0]):
+        target = (ROOT / a.files[0]).resolve()
+        return not target.exists() or any((ROOT / f).resolve() == target for f in a.include)
+    return False
+
+
+def direct_note(base, a):
+    if base == 'scribe':
+        return (f"\n\nNOTE: you have no tools. Reply with the COMPLETE new contents of `{a.files[0]}` between a line that says "
+                "only BEGIN FILE and a line that says only END FILE. After that, the report.")
+    return '\n\nNOTE: you have no tools. Everything you need is above. Answer directly.'
+
+
+def extract_file(reply):
+    """A 'BEGIN FILE' line ... an 'END FILE' line -> (file contents, the rest of the reply), or (None, reply).
+    Small models decorate the marker lines (=====, <<< >>>, **): anything that is not a letter or digit is ignored there."""
+    m = re.search(r'^[\W_]*BEGIN FILE[\W_]*\r?\n(.*?)\r?\n?^[\W_]*END FILE[\W_]*$', reply or '', re.S | re.M)
+    if not m:
+        return None, reply
+    return m.group(1) + '\n', (reply[:m.start()] + reply[m.end():]).strip()
+
+
+def diff_stat(root, lines):
+    """' M a.py' -> ' M a.py (+3 -1)': how big each change is, so the Lead knows what to read."""
+    out = []
+    for line in lines:
+        xy, path, size = line[:2], line[3:], ''
+        try:
+            if xy == '??':
+                size = f" (+{len((Path(root) / path).read_text(encoding='utf-8', errors='replace').splitlines())})"
+            elif xy != '--':
+                r = subprocess.run(['git', '-C', str(root), 'diff', '--numstat', 'HEAD', '--', path],
+                                   capture_output=True, text=True, encoding='utf-8', errors='replace')
+                f = r.stdout.split()
+                if len(f) >= 2:
+                    size = f' (+{f[0]} -{f[1]})'
+        except OSError:
+            pass
+        out.append(line + size)
+    return out
+
+
 # --- agy -----------------------------------------------------------------------------------------
 def parse_agy_stream(stream, model):
     result = None
@@ -412,7 +461,7 @@ def invoke_agy(w, ctx):
 # --- Copilot + cloud API ----------------------------------------------------------------------
 def log_tokens(log_dir):
     """Copilot writes token counts only to its debug log (also while running)."""
-    r = {'in': 0, 'out': 0, 'cached': 0, 'last': 0}
+    r = {'in': 0, 'out': 0, 'cached': 0, 'last': 0, 'calls': 0}
     last_in = last_out = 0
     for f in sorted(glob.glob(os.path.join(str(log_dir), '*.log'))):
         try:
@@ -422,6 +471,7 @@ def log_tokens(log_dir):
         for v in re.findall(r'"prompt_tokens": (\d+)', text):
             last_in = int(v)
             r['in'] += last_in
+            r['calls'] += 1
         for v in re.findall(r'"completion_tokens": (\d+)', text):
             last_out = int(v)
             r['out'] += last_out
@@ -480,27 +530,75 @@ def parse_copilot_events(text):
     }
 
 
-def invoke_copilot(w, ctx):
-    a = ctx.args
+def provider_setup(w, ctx):
+    """-> (provider, model, key, openai guard, refusal result or None)."""
     pv = PROVIDERS.get(w['p'])
     if not pv:
-        raise Fail(f"Unknown provider '{w['p']}' (use {', '.join(PROVIDERS)}).", 2)
+        raise Fail(f"Unknown provider '{w['p']}' (agent/models.json has: {', '.join(PROVIDERS)}).", 2)
     model = pv['model'] if not w['pm'] or w['pm'] == 'free' else w['pm']
-    tier = limit = used = None
+    guard = None
     if w['p'] == 'openai':
         tier = openai_tier(model)
+        refused = lambda why: (pv, model, None, None, {'worker': f'openai {model}', 'code': 6, 'calls': 0, 'denied': [], 'error': why})
         if not tier:
-            return {'worker': f'openai {model}', 'code': 6, 'calls': 0, 'denied': [],
-                    'error': f'REFUSED: {model} is not on the free list (would bill the prepaid credit). See MODELS.md.'}
+            return refused(f'REFUSED: {model} is not on the free list (would bill the prepaid credit). See agent/models.json.')
         used, limit = openai_used_today(ctx.openai_log, tier), OPENAI_FREE[tier]['limit']
         if used >= 0.9 * limit:
-            return {'worker': f'openai {model}', 'code': 6, 'calls': 0, 'denied': [],
-                    'error': f'REFUSED: OpenAI {tier} free tier at {used} of {limit} tokens today (stop at 90%; capacity).'}
-    if not shutil.which('copilot'):
-        raise Fail('copilot not found on PATH.', 3)
+            return refused(f'REFUSED: OpenAI {tier} free tier at {used} of {limit} tokens today (stop at 90%; capacity).')
+        guard = {'tier': tier, 'used': used, 'limit': limit}
     key = os.environ.get(pv['key']) or windows_user_env(pv['key'])
     if not key:
         raise Fail(f"Put {pv['key']}=... in .env (see .env.example).", 3)
+    return pv, model, key, guard, None
+
+
+def openai_log_usage(ctx, guard, model, tokens):   # count free-tier usage per UTC day
+    with open(ctx.openai_log, 'a', encoding='utf-8') as f:
+        f.write(json.dumps({'day': utc_day(), 'tier': guard['tier'], 'model': model, 'tokens': tokens}) + '\n')
+
+
+def invoke_direct(w, ctx):
+    """One plain chat-completions call: no harness, no tools, no resent history."""
+    pv, model, key, guard, refusal = provider_setup(w, ctx)
+    if refusal:
+        return refusal
+    o = {'worker': f"{w['p']} {model} (no tools)", 'conversation_id': None, 'response': None, 'error': '', 'calls': 1,
+         'input_tokens': None, 'cache_read_tokens': None, 'output_tokens': None, 'thinking_tokens': 0, 'denied': [], 'code': 0}
+    req = urllib.request.Request(pv['url'].rstrip('/') + '/chat/completions', method='POST',
+                                 data=json.dumps({'model': model, 'messages': [{'role': 'user', 'content': ctx.task}]}).encode('utf-8'),
+                                 headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=ctx.args.timeout_sec) as r:
+            data = json.loads(r.read().decode('utf-8', errors='replace'))
+        o['response'] = (((data.get('choices') or [{}])[0].get('message') or {}).get('content') or '').strip() or None
+        u = data.get('usage') or {}
+        o['input_tokens'], o['output_tokens'] = u.get('prompt_tokens'), u.get('completion_tokens')
+        if not o['response']:
+            o['code'] = 5
+    except urllib.error.HTTPError as e:
+        o['code'], o['error'] = 6, f"{e.code} {e.read().decode('utf-8', errors='replace')[:300]}"
+    except (TimeoutError, OSError, ValueError) as e:   # URLError is an OSError
+        timed_out = 'timed out' in str(e).lower()
+        o['code'], o['error'] = (3 if timed_out else 6), f'{type(e).__name__}: {e}'
+    if guard:
+        openai_log_usage(ctx, guard, model, (o['input_tokens'] or 0) + (o['output_tokens'] or 0))
+    if o['code'] == 0 and ctx.base == 'scribe':   # the script writes the one file the scribe was asked for
+        content, rest = extract_file(o['response'])
+        if content is None:
+            o['code'], o['error'] = 5, 'no BEGIN FILE ... END FILE block in the reply: nothing written'
+        else:
+            (ROOT / ctx.args.files[0]).write_text(content, encoding='utf-8')
+            o['response'] = rest or 'Changed: ' + ctx.args.files[0]
+    return o
+
+
+def invoke_copilot(w, ctx):
+    a = ctx.args
+    pv, model, key, guard, refusal = provider_setup(w, ctx)
+    if refusal:
+        return refusal
+    if not shutil.which('copilot'):
+        raise Fail('copilot not found on PATH.', 3)
     # Only the worker's environment: the user's own copilot setup is untouched.
     env = dict(os.environ)
     for k in ('COPILOT_PROVIDER_BEARER_TOKEN', 'COPILOT_PROVIDER_WIRE_MODEL', 'COPILOT_PROVIDER_MODEL_ID', 'COPILOT_PROVIDER_WIRE_API'):
@@ -510,34 +608,40 @@ def invoke_copilot(w, ctx):
     if w['p'] == 'openai':
         env['COPILOT_PROVIDER_WIRE_API'] = 'responses' if re.match(r'^(gpt-5|o\d)', model) else 'completions'
 
-    t = copilot_tools(ctx.base, ctx.proj['check_dir'])
+    tools = copilot_tools(ctx.base, ctx.proj['check_dir'])
     log_dir = Path(tempfile.gettempdir()) / f'cp-log-{uuid.uuid4()}'
-    cmd = ['copilot', '-p', ctx.task, '--output-format', 'json', '--no-color', '--no-ask-user', '--no-custom-instructions',
+    # Prompt via stdin (Windows limits a command line to ~32k characters).
+    cmd = ['copilot', '--output-format', 'json', '--no-color', '--no-ask-user', '--no-custom-instructions',
            '--disable-builtin-mcps', '--disable-mcp-server', 'ddg-search',
            '--secret-env-vars', 'COPILOT_PROVIDER_API_KEY,OPENROUTER_API_KEY,NVIDIA_API_KEY,GEMINI_API_KEY,OPENAI_API_KEY',
-           f"--available-tools={t['tools']}", '--allow-tool', 'read', '--deny-tool', 'shell(git:*)', '--deny-tool', 'url',
+           f"--available-tools={tools['tools']}", '--allow-tool', 'read', '--deny-tool', 'shell(git:*)', '--deny-tool', 'url',
+           '--deny-tool', 'read(.env)', '--deny-tool', 'write(.env)',   # keys never reach a cloud model
            '--log-level', 'debug', '--log-dir', str(log_dir)]
-    for x in t['allow']:
+    for x in tools['allow']:
         cmd += ['--allow-tool', x]
     if not a.no_sandbox:
         cmd += ['--sandbox']
     if a.conversation:
         cmd += ['--resume', a.conversation]
 
-    # OpenAI: cap tokens DURING the run (a looping worker once used 1.4M in one run).
-    # Cap = what is left below 90% of today's free tier, and at most OPENAI_RUN_CAP per run.
+    # Caps DURING the run. Every provider: max model calls (a looping worker burns a daily quota).
+    # OpenAI too: what is left below 90% of today's free tier, and at most OPENAI_RUN_CAP per run
+    # (a looping worker once used 1.4M tokens in one run).
     cap = 0
-    if w['p'] == 'openai':
-        run_cap = int(os.environ.get('DELEGATE_OPENAI_RUN_CAP') or OPENAI_RUN_CAP[tier])   # env: for testing
-        cap = min(int(0.9 * limit) - used, run_cap)
+    if guard:
+        run_cap = int(os.environ.get('DELEGATE_OPENAI_RUN_CAP') or OPENAI_RUN_CAP[guard['tier']])   # env: for testing
+        cap = min(int(0.9 * guard['limit']) - guard['used'], run_cap)
+    stopped = []
 
-    def over_cap():   # look one call ahead: calls only grow (history is resent)
-        if cap <= 0:
-            return False
+    def over_cap():   # tokens: look one call ahead, calls only grow (history is resent)
         lt = log_tokens(log_dir)
-        return lt['total'] + lt['last'] >= cap
+        if cap > 0 and lt['total'] + lt['last'] >= cap:
+            stopped.append(f'STOPPED: OpenAI token cap {cap} reached during the run (free-tier guard).')
+        elif a.max_calls and lt['calls'] >= a.max_calls:
+            stopped.append(f'STOPPED: {lt["calls"]} model calls, the cap is {a.max_calls} (loop guard; --max-calls or agent/models.json).')
+        return bool(stopped)
 
-    text, why = run_tool(cmd, env=env, timeout=a.timeout_sec, watch=over_cap)
+    text, why = run_tool(cmd, stdin_bytes=ctx.task.encode('utf-8'), env=env, timeout=a.timeout_sec, watch=over_cap)
     p = parse_copilot_events(text)
     tok = log_tokens(log_dir)
     shutil.rmtree(log_dir, ignore_errors=True)
@@ -545,12 +649,11 @@ def invoke_copilot(w, ctx):
          'calls': p['calls'], 'input_tokens': tok['in'], 'cache_read_tokens': tok['cached'], 'output_tokens': tok['out'],
          'thinking_tokens': 0, 'denied': p['denied']}
     if why == 'stopped':
-        o['error'] = f'STOPPED: OpenAI token cap {cap} reached during the run (free-tier guard).'
+        o['error'] = stopped[0]
     o['code'] = (3 if why == 'timeout' else 6 if why == 'stopped' or p['error'] else 4 if p['denied']
                  else 5 if not p['response'] else 0)
-    if w['p'] == 'openai':   # count free-tier usage per UTC day
-        with open(ctx.openai_log, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({'day': utc_day(), 'tier': tier, 'model': model, 'tokens': tok['in'] + tok['out']}) + '\n')
+    if guard:
+        openai_log_usage(ctx, guard, model, tok['in'] + tok['out'])
     return o
 
 
@@ -576,7 +679,11 @@ def parse_args(argv):
                     help='the files (or globs) this task may change; other changes are listed apart')
     ap.add_argument('--part', metavar='NAME', help='the part this task is about: fills {name} in check_one')
     ap.add_argument('--no-check', action='store_true', help='do not run check_one for this task')
-    ap.add_argument('--no-fix', action='store_true', help='run the check, but do not send a failure back to the worker')
+    ap.add_argument('--fix-rounds', type=int, choices=(0, 1, 2), default=1,
+                    help='how often a failing check goes back to the worker (default 1)')
+    ap.add_argument('--no-direct', action='store_true',
+                    help='reviewer/scribe on an API model: use the Copilot harness even when one plain API call would do')
+    ap.add_argument('--max-calls', type=int, default=MAX_CALLS, help=f'Copilot workers: stop after this many model calls (default {MAX_CALLS})')
     ap.add_argument('--check-timeout-sec', type=int, default=300)
     ap.add_argument('--timeout-sec', type=int, default=480)
     ap.add_argument('--no-sandbox', action='store_true', help='only if the check must write outside this folder')
@@ -598,7 +705,7 @@ def main(argv=None):
     (ROOT / '.worker').mkdir(exist_ok=True)   # git-ignored, so missing in a fresh clone
     load_env(ROOT)
 
-    proj, notes, private = {'check_one': '', 'check_all': '', 'check_dir': ''}, '', False
+    proj, notes, private = {'check_one': '', 'check_all': '', 'check_dir': '', 'private': ''}, '', True
     if (ROOT / 'PROJECT.md').exists():
         proj, notes, private = parse_project(read_text(ROOT / 'PROJECT.md'))
     if a.part and not re.fullmatch(r'[\w./\\-]+', a.part):   # it becomes part of a shell line
@@ -616,7 +723,8 @@ def main(argv=None):
 
     available = parse_available(read_text(ROOT / 'SETUP.md')) if (ROOT / 'SETUP.md').exists() else None
     if private and (a.provider or a.openrouter):
-        raise Fail('PROJECT.md says this project is private: cloud API workers are not allowed. Use agy (--model), --local, or do it yourself.', 6)
+        raise Fail('This project is private (PROJECT.md): cloud API workers are not allowed. Use agy (--model), --local, '
+                   'or do it yourself. To allow free cloud workers, set "private: no" in the settings block of PROJECT.md.', 6)
     if a.openrouter:
         a.provider = 'openrouter'
         a.provider_model = a.provider_model or a.openrouter
@@ -627,7 +735,8 @@ def main(argv=None):
     else:
         chain = [w for w in parse_chain(model_list) if is_available(w, available) and not (private and w['h'] != 'agy')]
         if not chain:
-            raise Fail(f"Role '{a.role}': none of its workers ({model_list}) is available on this machine (SETUP.md). Add one, or do it yourself.", 6)
+            raise Fail(f"Role '{a.role}': none of its workers ({model_list}) is available on this machine (SETUP.md). Add one, or do it yourself."
+                       + (' The project is private, so only agy workers count. To allow free cloud workers, set "private: no" in the settings block of PROJECT.md.' if private else ''), 6)
 
     task = read_text(a.task_file) if a.task_file else a.task
     if not task:
@@ -659,6 +768,18 @@ def main(argv=None):
 
     ctx = Ctx()
     ctx.args, ctx.task, ctx.base, ctx.proj = a, task, base, proj
+    direct = direct_mode(base, a)   # reviewer/scribe on an API model: one plain call, no harness
+
+    def run_worker(w):
+        if w['h'] == 'agy':
+            return invoke_agy(w, ctx)
+        if not direct:
+            return invoke_copilot(w, ctx)
+        ctx.task = task + direct_note(base, a)
+        try:
+            return invoke_direct(w, ctx)
+        finally:
+            ctx.task = task
     ctx.openai_log = ROOT / '.worker' / 'openai-usage.jsonl'
 
     # Run the chain: transient provider error -> retry once -> next worker.
@@ -667,7 +788,7 @@ def main(argv=None):
     tried, res, changed = [], None, False
     for w in chain:
         for attempt in (1, 2):
-            res = invoke_agy(w, ctx) if w['h'] == 'agy' else invoke_copilot(w, ctx)
+            res = run_worker(w)
             tried.append(f"{res['worker']}={res['code']}")
             # With --files, another worker's changes elsewhere don't count as this worker's.
             changed = bool(split_scope(changed_since(before, git_snapshot(ROOT)), a.files)[0])
@@ -678,10 +799,11 @@ def main(argv=None):
         if res['code'] != 6 or changed:
             break
 
-    # Builder/tester: run the check now; on failure the same worker gets the output once, then it runs again.
+    # Builder/tester: run the check now; while it fails the same worker gets the output (--fix-rounds times).
     if check_cmd and base in ('builder', 'tester') and res['code'] in (0, 3):
-        check = run_check(check_cmd, a.check_timeout_sec)
-        if not check['passed'] and res['code'] == 0 and res.get('conversation_id') and not a.no_fix:
+        check, rounds = run_check(check_cmd, a.check_timeout_sec), 0
+        while not check['passed'] and res['code'] == 0 and res.get('conversation_id') and rounds < a.fix_rounds:
+            rounds += 1
             a.conversation, ctx.task = res['conversation_id'], fix_prompt(base, check)
             fix = invoke_agy(w, ctx) if w['h'] == 'agy' else invoke_copilot(w, ctx)
             tried.append(f"{fix['worker']}=fix:{fix['code']}")
@@ -691,17 +813,21 @@ def main(argv=None):
             res['denied'] = (res.get('denied') or []) + (fix.get('denied') or [])
             if fix.get('response'):
                 res['response'] = fix['response']
+            if fix.get('conversation_id'):
+                res['conversation_id'] = fix['conversation_id']
+            check = run_check(check_cmd, a.check_timeout_sec)
+            check['fix_rounds'] = rounds
             if fix['code'] != 0:
                 res['error'] = f"fix round ended with {LABELS.get(fix['code'], fix['code'])}: {fix.get('error') or ''}".strip()
-            check = run_check(check_cmd, a.check_timeout_sec)
-            check['fix_rounds'] = 1
+                break
         if res['code'] == 0 and not check['passed']:
             res['code'] = 7
     res['check'] = check
     own, outside = split_scope(changed_since(before, git_snapshot(ROOT)), a.files)
     run_file = f'.worker/run-{uuid.uuid4().hex[:8]}.json'   # one per run: parallel workers don't overwrite each other
     res.update({'role': a.role, 'seconds': int(time.monotonic() - start), 'tried': tried, 'run_file': run_file,
-                'files_changed': [c.strip() for c in own], 'files_outside': [c.strip() for c in outside]})
+                'files_changed': [c.strip() for c in diff_stat(ROOT, own)],
+                'files_outside': [c.strip() for c in diff_stat(ROOT, outside)]})
     for k in ('conversation_id', 'response', 'error', 'input_tokens', 'cache_read_tokens', 'output_tokens', 'thinking_tokens'):
         res.setdefault(k, None)
 
@@ -720,7 +846,8 @@ def main(argv=None):
         if res['files_outside']:
             print('NOT IN --files (another worker, or this one broke its scope): ' + '; '.join(res['files_outside']))
         if check:
-            print('check: ' + check_text(check) + (' | after 1 fix round' if check.get('fix_rounds') else ''))
+            n = check.get('fix_rounds')
+            print('check: ' + check_text(check) + (f" | after {n} fix round{'s' if n > 1 else ''}" if n else ''))
             if check.get('passed') is False:
                 print(check['output'])
         if res['denied']:

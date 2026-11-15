@@ -1,0 +1,30 @@
+{
+  "_about": "Read by delegate.py, check_setup.py and bench.py. Add a model or an OpenAI-compatible provider here: no Python changes needed.",
+
+  "agy_models": ["gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high", "gpt-oss-120b-medium", "claude-sonnet-4-6"],
+
+  "default_models": {
+    "_about": "Used when a role file has no models: line.",
+    "builder": "agy:gemini-3.8-flash-low, nvidia, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free",
+    "tester": "gemini, nvidia, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free",
+    "reviewer": "agy:claude-sonnet-4-6, openai:o3, agy:gpt-oss-120b-medium",
+    "scribe": "nvidia:nvidia/nemotron-3.5-lightning-30b-a3b, agy:gemini-3.8-flash-low, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"
+  },
+
+  "providers": {
+    "_about": "name: base URL (OpenAI-compatible), the .env key name, the model used when a chain entry gives none.",
+    "openrouter": {"url": "https://openrouter.ai/api/v1", "key": "OPENROUTER_API_KEY", "model": "openrouter/free"},
+    "nvidia": {"url": "https://integrate.api.nvidia.com/v1", "key": "NVIDIA_API_KEY", "model": "mistralai/mistral-large-4-1t-a52b"},
+    "gemini": {"url": "https://generativelanguage.googleapis.com/v1beta/openai/", "key": "GEMINI_API_KEY", "model": "gemini-flash-lite-latest"},
+    "openai": {"url": "https://api.openai.com/v1", "key": "OPENAI_API_KEY", "model": "gpt-5.4-mini"}
+  },
+
+  "openai_free": {
+    "_about": "OpenAI complimentary daily tokens (data sharing on): only these models, only up to these limits. Anything else bills the prepaid credit, so delegate.py refuses it. Reset: 00:00 UTC.",
+    "big": {"limit": 250000, "models": ["gpt-5.4", "gpt-5.2", "gpt-5.1", "gpt-5", "gpt-4.1", "gpt-4o", "o1", "o3"]},
+    "mini": {"limit": 2500000, "models": ["gpt-5.4-mini", "gpt-5.4-nano", "gpt-5-mini", "gpt-5-nano", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4o-mini", "o3-mini", "o4-mini"]}
+  },
+  "openai_run_cap": {"_about": "Max tokens per single run (normal task: 15-75k).", "big": 60000, "mini": 400000},
+
+  "max_calls": 40
+}

@@ -121,7 +121,8 @@ Each pack says what a good goal should cover, how to check the work, how to spli
 - **OpenAI guard:** `delegate.py` refuses models that would bill your credit, and stops at 90% of the free daily
   tokens, also in the middle of a job. Its count is an estimate; OpenAI's usage page is the real number.
 - **Privacy:** the free tiers of NVIDIA, Gemini API, OpenRouter and OpenAI may read or train on what you send.
-  Mark a project private in `PROJECT.md` and `delegate.py` only uses agy (or Ollama); Claude does the rest.
+  A project is private until `PROJECT.md` says `private: no`: until then `delegate.py` only uses agy (or Ollama).
+  Workers through Copilot can't read or write `.env`, so your keys don't reach a cloud model.
 
 ## Keeping tokens (and so cost and speed) down
 
@@ -140,7 +141,10 @@ run their own check. On a test job this saved 38-59% of the tokens at the same q
 | `agent/roles/` | The roles in use in this project. |
 | `agent/bases/` | The core rules for each base type. |
 | `agent/delegate.py` | Runs a worker. `agent/check_setup.py` checks your setup. |
-| `agent/MODELS.md` | Every model: cost, limits, rating, pick order. |
+| `agent/MODELS.md` | Which model to pick per role, with ratings. `agent/LIMITS.md`: cost and free limits per provider. |
+| `agent/models.json` | The models, providers and limits `delegate.py` knows. Add a provider here, no code needed. |
+| `agent/bench.py` | Rates your own models: small tasks, scored with tests the worker never sees. |
+| `agent/START.md` | The steps Claude follows at the start of a project. |
 | `agent/NOTES.md` | Measurements and lessons learned (starts empty). |
 | `agent/setup/` | How to install each tool and get each key. |
 | `templates/` | Role template and project packs. |

@@ -28,8 +28,27 @@ class ParseFiles(unittest.TestCase):
 
     def test_project_template_placeholders(self):
         proj, notes, private = d.parse_project(d.read_text(d.ROOT / 'PROJECT.md')) if (d.ROOT / 'PROJECT.md').exists() else ({}, '', False)
-        self.assertFalse(private)
+        self.assertTrue(private, 'the unfilled template must not allow cloud workers')
         self.assertNotIn('- <', notes)
+
+    def test_private_fails_closed(self):
+        block = lambda v: f'```settings\ncheck_one:\nprivate: {v}\n```\n'
+        self.assertFalse(d.parse_project(block('no'))[2])
+        self.assertFalse(d.parse_project(block('No'))[2])
+        self.assertTrue(d.parse_project(block('yes'))[2])
+        self.assertTrue(d.parse_project(block('nope'))[2])          # typo: stays private
+        self.assertTrue(d.parse_project(block(''))[2])
+        self.assertTrue(d.parse_project('no settings at all')[2])
+        self.assertFalse(d.parse_project('- **Private?** no: free cloud workers allowed')[2])   # older PROJECT.md
+        self.assertTrue(d.parse_project('**Private?** no\n' + block('yes'))[2])                  # settings win
+
+    def test_models_json(self):
+        for table in (d.PROVIDERS, d.DEFAULT_MODELS, d.OPENAI_FREE, d.OPENAI_RUN_CAP):
+            self.assertFalse([k for k in table if k.startswith('_')])
+        self.assertEqual(set(d.DEFAULT_MODELS), set(d.BASES))
+        for pv in d.PROVIDERS.values():
+            self.assertEqual(set(pv), {'url', 'key', 'model'})
+        self.assertGreater(d.MAX_CALLS, 0)
 
     def test_role(self):
         fm, body = d.parse_role('---\r\nbase: tester\r\nmodels: gemini, nvidia:x/y\r\n---\r\nExtra rule.\r\n')
@@ -54,7 +73,15 @@ class ParseFiles(unittest.TestCase):
         self.assertIsNone(d.parse_available('nothing'))
         self.assertTrue(d.is_available({'h': 'agy', 'm': 'x'}, av))
         self.assertFalse(d.is_available({'h': 'cp', 'p': 'nvidia', 'pm': ''}, av))
-        self.assertFalse(d.is_available({'h': 'cp', 'p': 'gemini', 'pm': ''}, av))
+        old = os.environ.pop('GEMINI_API_KEY', None)
+        try:   # a provider SETUP.md doesn't list (added in models.json): available when its key is set
+            self.assertFalse(d.is_available({'h': 'cp', 'p': 'gemini', 'pm': ''}, av))
+            os.environ['GEMINI_API_KEY'] = 'k'
+            self.assertTrue(d.is_available({'h': 'cp', 'p': 'gemini', 'pm': ''}, av))
+        finally:
+            os.environ.pop('GEMINI_API_KEY', None)
+            if old:
+                os.environ['GEMINI_API_KEY'] = old
         self.assertTrue(d.is_available({'h': 'cp', 'p': 'gemini', 'pm': ''}, None))
 
 
@@ -169,8 +196,11 @@ class Check(unittest.TestCase):
         code, last, out = self.run_main(fake, ['--part', 'ok'])
         self.assertEqual((code, len(calls)), (7, 2))
         self.assertIn('[CHECK FAILED]', out)
-        code, last, _ = self.run_main(fake, ['--part', 'ok', '--no-fix'])
+        code, last, _ = self.run_main(fake, ['--part', 'ok', '--fix-rounds', '0'])
         self.assertEqual((code, len(calls)), (7, 3))
+        code, last, out = self.run_main(fake, ['--part', 'ok', '--fix-rounds', '2'])
+        self.assertEqual((code, len(calls), last['check']['fix_rounds']), (7, 6, 2))
+        self.assertIn('after 2 fix rounds', out)
         code, last, out = self.run_main(fake)   # no --part: {name} can't be filled, so no check
         self.assertEqual(code, 0)
         self.assertIn('check: not run', out)
@@ -206,8 +236,9 @@ class Changes(unittest.TestCase):
             Path(t, 'b.py').write_text('1\n', encoding='utf-8')        # back to the committed text
             Path(t, 'my file.py').write_text('2\n', encoding='utf-8')
             Path(t, 'new.py').write_text('x\n', encoding='utf-8')
-            self.assertEqual(d.changed_since(before, d.git_snapshot(t)),
-                             [' M a.py', ' M my file.py', '?? new.py', '-- b.py'])
+            lines = d.changed_since(before, d.git_snapshot(t))
+            self.assertEqual(lines, [' M a.py', ' M my file.py', '?? new.py', '-- b.py'])
+            self.assertEqual(d.diff_stat(t, lines), [' M a.py (+1 -1)', ' M my file.py (+1 -1)', '?? new.py (+1)', '-- b.py'])
 
     def test_scope(self):
         lines = ['?? src/shop.py', ' M tests/test_shop.py', '?? src/cart.py', ' M .env']
@@ -216,6 +247,80 @@ class Changes(unittest.TestCase):
         self.assertEqual(outside, ['?? src/cart.py', ' M .env'])
         self.assertEqual(d.split_scope(lines, []), (lines, []))
         self.assertTrue(d.in_scope(' M .env', ['.env']))
+
+
+class Direct(unittest.TestCase):
+    def args(self, **kw):
+        import argparse
+        base = dict(no_direct=False, conversation=None, local=False, include=[], files=[], timeout_sec=30)
+        return argparse.Namespace(**{**base, **kw})
+
+    def test_when_one_plain_call_is_enough(self):
+        self.assertTrue(d.direct_mode('reviewer', self.args(include=['a.py'])))
+        self.assertFalse(d.direct_mode('reviewer', self.args()))                       # nothing pasted: it must read files
+        self.assertFalse(d.direct_mode('reviewer', self.args(include=['a.py'], no_direct=True)))
+        self.assertFalse(d.direct_mode('reviewer', self.args(include=['a.py'], conversation='c')))
+        self.assertFalse(d.direct_mode('builder', self.args(include=['a.py'], files=['a.md'])))
+        self.assertTrue(d.direct_mode('scribe', self.args(files=['docs/brand-new-file.md'])))
+        self.assertFalse(d.direct_mode('scribe', self.args(files=['README.md'])))      # exists, not pasted: would be overwritten blind
+        self.assertTrue(d.direct_mode('scribe', self.args(files=['README.md'], include=['README.md'])))
+        self.assertFalse(d.direct_mode('scribe', self.args(files=['a.md', 'b.md'])))
+        self.assertFalse(d.direct_mode('scribe', self.args(files=['docs/*.md'])))
+        self.assertIn('BEGIN FILE', d.direct_note('scribe', self.args(files=['x.md'])))
+
+    def test_extract_file(self):
+        self.assertEqual(d.extract_file('intro\nBEGIN FILE\n# Title\n\ntext\nEND FILE\nChanged: x.md'),
+                         ('# Title\n\ntext\n', 'intro\n\nChanged: x.md'))
+        self.assertEqual(d.extract_file('no block'), (None, 'no block'))
+        self.assertEqual(d.extract_file('=== BEGIN FILE ===\na\n<<<END FILE>>>\n')[0], 'a\n')   # decorated markers
+
+    def call(self, base, reply=None, error=None, files=()):
+        import io
+        import urllib.error
+        seen = {}
+
+        def fake_urlopen(req, timeout=None):
+            seen['url'], seen['body'], seen['auth'] = req.full_url, json.loads(req.data), req.get_header('Authorization')
+            if error:
+                raise urllib.error.HTTPError(req.full_url, error, 'x', None, io.BytesIO(b'{"error":"rate limit"}'))
+            return io.BytesIO(json.dumps({'choices': [{'message': {'content': reply}}],
+                                          'usage': {'prompt_tokens': 900, 'completion_tokens': 40}}).encode())
+
+        old = (d.urllib.request.urlopen, d.ROOT, os.environ.get('GEMINI_API_KEY'))
+        with tempfile.TemporaryDirectory() as t:
+            d.urllib.request.urlopen, d.ROOT = fake_urlopen, Path(t)
+            os.environ['GEMINI_API_KEY'] = 'secret-key'
+            ctx = d.Ctx()
+            ctx.args, ctx.task, ctx.base = self.args(files=list(files)), 'THE TASK', base
+            try:
+                o = d.invoke_direct({'h': 'cp', 'p': 'gemini', 'pm': 'm1'}, ctx)
+                written = {f: Path(t, f).read_text(encoding='utf-8') for f in files if Path(t, f).exists()}
+            finally:
+                d.urllib.request.urlopen, d.ROOT = old[0], old[1]
+                os.environ.pop('GEMINI_API_KEY', None)
+                if old[2]:
+                    os.environ['GEMINI_API_KEY'] = old[2]
+        return o, seen, written
+
+    def test_reviewer_is_one_call(self):
+        o, seen, _ = self.call('reviewer', reply='Problems: none')
+        self.assertEqual((o['code'], o['calls'], o['response'], o['input_tokens'], o['output_tokens']), (0, 1, 'Problems: none', 900, 40))
+        self.assertEqual(seen['url'], 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions')
+        self.assertEqual(seen['body'], {'model': 'm1', 'messages': [{'role': 'user', 'content': 'THE TASK'}]})
+        self.assertEqual(seen['auth'], 'Bearer secret-key')
+        self.assertEqual(self.call('reviewer', reply='')[0]['code'], 5)
+
+    def test_provider_error_is_transient(self):
+        o, _, _ = self.call('reviewer', error=429)
+        self.assertEqual(o['code'], 6)
+        self.assertTrue(d.TRANSIENT.search(o['error']))
+
+    def test_scribe_file_is_written_by_the_script(self):
+        o, _, written = self.call('scribe', reply='BEGIN FILE\n# Guide\nEND FILE\nChanged: guide.md\nFacts unsure: nothing', files=['guide.md'])
+        self.assertEqual((o['code'], written), (0, {'guide.md': '# Guide\n'}))
+        self.assertEqual(o['response'], 'Changed: guide.md\nFacts unsure: nothing')
+        o, _, written = self.call('scribe', reply='I forgot the markers', files=['guide.md'])
+        self.assertEqual((o['code'], written), (5, {}))
 
 
 class Results(unittest.TestCase):
@@ -248,7 +353,7 @@ class Results(unittest.TestCase):
             Path(t, 'a.log').write_text('"prompt_tokens": 100, "completion_tokens": 5\n"prompt_tokens": 200, '
                                         '"completion_tokens": 7, "cached_tokens": 50', encoding='utf-8')
             r = d.log_tokens(t)
-            self.assertEqual((r['in'], r['out'], r['cached'], r['last'], r['total']), (300, 12, 50, 207, 312))
+            self.assertEqual((r['in'], r['out'], r['cached'], r['last'], r['total'], r['calls']), (300, 12, 50, 207, 312, 2))
         self.assertEqual(d.log_tokens(Path(t) / 'gone')['total'], 0)
 
     def test_openai_guard(self):
@@ -312,6 +417,43 @@ class Processes(unittest.TestCase):
         r = subprocess.run([sys.executable, script, '--model', 'gemini-3.8-flash-low'], capture_output=True, text=True)
         self.assertEqual(r.returncode, 2)
         self.assertIn('--task', r.stderr)
+
+
+class Bench(unittest.TestCase):
+    def test_hidden_tests_pass_on_the_solution_and_fail_on_the_start(self):
+        import shutil
+        import bench
+        tasks = bench.load_tasks()
+        self.assertGreaterEqual(len(tasks), 2)
+        for task in tasks:
+            with tempfile.TemporaryDirectory() as t:
+                shutil.copytree(task['dir'] / 'solution', t, dirs_exist_ok=True)
+                self.assertEqual(bench.score(t, task), task['tests'], task['name'])
+            with tempfile.TemporaryDirectory() as t:
+                if (task['dir'] / 'start').exists():
+                    shutil.copytree(task['dir'] / 'start', t, dirs_exist_ok=True)
+                self.assertLess(bench.score(t, task), task['tests'] // 2, task['name'])
+
+    def test_prepare_makes_a_runnable_project(self):
+        import bench
+        task = bench.load_tasks(['inventory'])[0]
+        with tempfile.TemporaryDirectory() as t:
+            bench.prepare(task, t)
+            proj, _, private = d.parse_project(d.read_text(Path(t, 'PROJECT.md')))
+            self.assertFalse(private)
+            self.assertIn('tests.test_{name}', proj['check_one'])
+            for f in ('agent/delegate.py', 'agent/models.json', 'agent/roles/builder.md', 'inventory.py', 'tests', '.git'):
+                self.assertTrue(Path(t, f).exists(), f)
+            self.assertFalse(Path(t, 'agent', 'bench').exists(), 'the worker must not see the hidden tests')
+            self.assertEqual(d.git_snapshot(t), {})
+
+    def test_worker_flags_and_table(self):
+        import bench
+        self.assertEqual(bench.worker_flags('agy:gemini-3.8-flash-low'), ['--model', 'gemini-3.8-flash-low'])
+        self.assertEqual(bench.worker_flags('nvidia'), ['--provider', 'nvidia'])
+        self.assertEqual(bench.worker_flags('openrouter:a/b:free'), ['--provider', 'openrouter', '--provider-model', 'a/b:free'])
+        text = bench.table([{'worker': 'nvidia', 'task': 't', 'passed': 3, 'tests': 4, 'exit': 'OK', 'seconds': 9}])
+        self.assertIn('| nvidia | t | 3/4 | OK |', text)
 
 
 class CheckSetup(unittest.TestCase):

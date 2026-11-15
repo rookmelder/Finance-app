@@ -14,7 +14,7 @@ FRONTMATTER
 - models: the worker chain, first = main, the rest are fallbacks. Leave the line out to use the base's default.
     agy:<model>        gemini-3.8-flash-low, gemini-3.8-flash-medium, claude-sonnet-4-6 (reviewers only), gpt-oss-120b-medium
     <provider>:<id>    nvidia, gemini, openrouter, openai (openai: reviewer roles only)
-  Pick models from agent/MODELS.md. A tester/reviewer should not share a model with the builder it checks.
+  Pick models from agent/MODELS.md (the script's list: agent/models.json). A tester/reviewer should not share a model with the builder it checks.
 - does: one line, shown to the Lead when choosing roles.
 
 BODY (below the frontmatter): only what is special about this role. The base rules and the report format

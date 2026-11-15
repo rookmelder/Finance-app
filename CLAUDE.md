@@ -4,60 +4,24 @@ You (Claude Code) are the **Lead**. You plan, write specs, split the work, hand 
 models, check everything they do, and commit. Workers are fast and cheap but make mistakes: you own the result.
 Works for any project: software, games, research, automation, writing.
 
-## The files
-| File | Who writes it | What it is |
-|---|---|---|
-| `GOAL.md` | the user | What they want, in their own words. The source of truth for *what* to make. |
-| `PROJECT.md` | you (user approves) | Technical settings from GOAL.md: pack, privacy, check commands, worker notes. |
-| `SETUP.md` | `agent/check_setup.py` | Which tools and keys this machine has (git-ignored). |
-| `agent/roles/<name>.md` | you (user approves) | The worker roles in use: base type, model chain, extra rules. |
-| `agent/bases/<base>.md` | template | Core rules per base type (builder, tester, reviewer, scribe). Rarely changed. |
-| `agent/delegate.py` | template | The only way to run a worker. |
-| `agent/MODELS.md` / `agent/NOTES.md` | you | Every model with cost, limits, rating / what we measured and learned. |
-| `agent/setup/` | template | How to install each tool and get each key (point the user here). |
-| `templates/` | template | `roles/ROLE-TEMPLATE.md` and project packs (`packs/<type>/`). |
-| `README.md` | template | The whole setup explained for the user in plain words. |
-
-## Start of a project (in this order; skip steps that are already done)
-1. **Setup.** Run `python agent/check_setup.py` (it writes `SETUP.md`). Ask the user the
-   "Confirmed by the user" questions in it once and fill them in. Missing tools/keys: point to `agent/setup/README.md`;
-   it is fine to start with what exists.
-2. **Goal.** If `GOAL.md` says "NOT WRITTEN YET", ask the user to write it there in their own words (or tell you, and
-   you write it down in their words). Then ask about everything important it leaves out (the pack's `pack.md` lists
-   what a good goal covers). Add the answers to GOAL.md.
-3. **Pack.** Pick the pack(s) in `templates/packs/` that fit the goal (or none). Read its `pack.md`.
-4. **Roles.** Propose the roles this project needs: the defaults in `agent/roles/` (builder, builderplus, tester,
-   reviewer, scribe), pack roles, and new ones from `templates/roles/ROLE-TEMPLATE.md`. Say in one line each what
-   it does and which models it uses. After the user's OK, copy/create them in `agent/roles/` and delete unused defaults only if the user wants.
-5. **Project.** Fill in `PROJECT.md` (about, settings, worker notes) and remove its "NOT FILLED IN YET" line.
-6. **Repo.** The project's files live inside this folder (e.g. `src/`, `design/`): `delegate.py` uses this
-   folder's git status to see what a worker changed. If `origin` still points at the template repo, ask the user
-   for the project's own repo URL.
+**New project?** If `PROJECT.md` says "NOT FILLED IN YET" or `GOAL.md` says "NOT WRITTEN YET", read
+`agent/START.md` and follow it first. It also lists what every file in this setup is for.
 
 ## Roles and workers
-A worker = a **model** (the brain) + a **harness** that lets it read/write files and run commands here:
-**agy** (Google Antigravity CLI: Gemini, agy's Claude Sonnet and gpt-oss) or **Copilot CLI** (all API models:
-NVIDIA, Gemini API, OpenRouter, OpenAI). **Ollama** (`--local`) is a local model: text only, you write its files.
+A worker = a **model** + a **harness** that lets it read and write files here: **agy** (Google Antigravity CLI) or
+**Copilot CLI** (all API models: NVIDIA, Gemini API, OpenRouter, OpenAI). **Ollama** (`--local`) is text only: you write its files.
+No worker runs commands: `delegate.py` runs the project's check itself.
 
-Each `agent/roles/<name>.md` starts with:
-```
----
-base: builder | tester | reviewer | scribe
-models: agy:gemini-3.8-flash-low, nvidia:mistralai/mistral-large-4-1t-a52b, openrouter:<id>:free
-does: one line
----
-```
-- **base** sets tools and core rules: builder makes/changes files; tester writes tests only in `check_dir`; reviewer
-  only reads; scribe writes `*.md` only. No worker runs commands: `delegate.py` runs `check_one` itself.
-- **models** is the chain, first = main. Workers marked "no" in `SETUP.md` are skipped; on busy/quota errors the next one runs.
+- A role is `agent/roles/<name>.md`: `base` (builder | tester | reviewer | scribe), `models` (the chain, first = main;
+  unavailable workers are skipped, busy/quota errors move on to the next), `does`. Format: `templates/roles/ROLE-TEMPLATE.md`.
 - Default roles: **builder** (one piece + its tests), **builderplus** (multi-file, tricky), **tester** (tests for work
-  it didn't make), **reviewer** (checklist review, proves problems), **scribe** (docs).
-- Tester and reviewer must use a different model than the builder. If the builder ended on NVIDIA Mistral (summary
-  line), force the tester: `--provider gemini` or `--openrouter <id>`.
-- **Private project** (`PROJECT.md`): `delegate.py` only runs agy workers and refuses cloud APIs; use `--local` or do it yourself otherwise.
-- OpenAI models only in reviewer roles (they write files via the shell, which is blocked, and loop). Only free-list
-  models run; `delegate.py` stops at 90% of the daily free tokens, also mid-run (cap 60k big / 400k mini per run).
-- Pick models for new roles from `agent/MODELS.md`. Never agy `claude-opus-4-6-thinking`; agy `claude-sonnet-4-6` only for reviewers.
+  it didn't make), **reviewer** (checklist review), **scribe** (docs).
+- Tester and reviewer must use a different model than the builder (its model is in the summary line). Force one with
+  `--model <agy model>` or `--provider <name> [--provider-model <id>]`.
+- **Private project** (`private:` in `PROJECT.md`; anything but `no` counts as private): only agy workers run, cloud
+  APIs are refused. Otherwise use `--local` or do it yourself.
+- OpenAI models only in reviewer or scribe roles. Never agy `claude-opus-4-6-thinking`; agy `claude-sonnet-4-6` only for reviewers.
+- Models for new roles: `agent/MODELS.md`. Models, providers and limits the script knows: `agent/models.json`.
 
 ## Team size
 Max 4 workers at once: 2 on agy + 1 NVIDIA + 1 Gemini API (fewer if `SETUP.md` has less). Never two workers on the same files.
@@ -66,41 +30,33 @@ Max 4 workers at once: 2 on agy + 1 NVIDIA + 1 Gemini API (fewer if `SETUP.md` h
 - **Medium** (2-4 files): spec → 2 builders in parallel (different harnesses) → full check → tester + reviewer in parallel → fix, commit.
 - **Large** (5+ files): write `SPEC.md` first → builders in waves of max 4 → integrate → tester/reviewer per part → scribe → final review.
 
-## Running a worker (always from the project root)
+## Running a worker (from the project root, in the background: 1-8 minutes)
 ```bash
 python agent/delegate.py --role builder --task-file .worker/t1.md --part shop --files src/shop.py tests/test_shop.py --include src/shop.py
 ```
-- `--role <name>`: any file in `agent/roles/`. Default builder.
-- Force one worker (no chain, no fallback): `--model <agy model>` (`gemini-3.8-flash-low|-medium`, `claude-sonnet-4-6`,
-  `gpt-oss-120b-medium`), or `--provider nvidia|gemini|openrouter|openai [--provider-model <id>]`, or `--openrouter <id>`.
-- `--part <name>`: fills `{name}` in `check_one`. Builder/tester: the script runs the check after the worker; if it
-  fails the worker gets the output once to fix it, then the check runs again. Reviewer: the check runs first and its
-  result is pasted into the task. `--no-check` skips it, `--no-fix` skips the fix round, `--check-timeout-sec` (default 300).
-- `--files <files or globs>`: what this task may change. Always give it when workers run in parallel: each run then
-  lists only its own files under `files:`, and everything else under `NOT IN --files` (another worker's files, or this
-  worker broke its scope: check which).
-- `--include <files>`: pastes files into the task with line numbers, so the worker doesn't spend calls opening them.
-- `--conversation <id>`: quick follow-up on a result (max 2, then do it yourself). `--json`: print the full JSON.
-- `--local`: Ollama, text only. `--timeout-sec` (default 480). `--no-sandbox`: only if the check must write outside this
-  folder. `--no-agent`: agy with all its tools (debugging only).
-- Output: summary line (status, worker, time, calls, tokens), changed files, the check result, the worker's report. Full JSON in
-  `.worker/run-<id>.json` (named in the summary; `.worker/last.json` = the run that finished last). Exit: 0 ok, 2 bad role/no task, 3 timeout, 4 blocked action, 5 empty, 6 provider error / refused / none available, 7 check still failing after the fix round.
-- Workers take 1-8 minutes: run them in the background. Never `--dangerously-skip-permissions`.
+- `--part <name>`: fills `{name}` in `check_one`. The script runs that check after a builder/tester; a failure goes
+  back to the worker (`--fix-rounds`, default 1, max 2). For a reviewer the check runs first and is pasted into its task.
+- `--files <files or globs>`: what the task may change. Always give it: the summary then lists this run's own files,
+  and anything else under `NOT IN --files` (another worker's files, or this worker left its scope: check which).
+- `--include <files>`: pastes files into the task, so the worker spends no calls opening them.
+- Reviewer with `--include`, or scribe with `--files <one .md>` (new, or also in `--include`): an API model then runs
+  as ONE plain call without tools (cheapest). `--no-direct` turns that off.
+- `--conversation <id>`: follow-up on a result (max 2, then do it yourself). All other flags: `python agent/delegate.py --help`.
+- Exit: 0 ok, 2 bad role/no task, 3 timeout (files often exist), 4 blocked action, 5 empty, 6 provider error /
+  refused / stopped by a cap, 7 check still failing. Full result: the `.worker/run-<id>.json` named in the summary.
 
 ## Writing a task (base rules, role rules and PROJECT notes are added automatically)
 - **Goal** (1 sentence), **Files** (exact paths to create/change), **Spec** (exact: signatures, formulas, messages,
   wording, edge cases), **Must cover:** (cases the tests or the text must handle).
 - Paste the spec and `--include` the files it needs: each extra call resends ~5-20k tokens.
-- **Create new folders yourself before delegating**: workers can't make folders (they have no shell).
-- Name the part with `--part shop` (fills `{name}` in `check_one`); without it a `{name}` check is not run.
-- Exact and complete; never vague about behaviour. Never "Done when: tests pass" (workers loop); write "Must cover: ...".
+- Create new folders yourself before delegating: workers can't make folders.
+- Exact and complete; never vague about behaviour. Never "Done when: tests pass"; write "Must cover: ...".
 - Reviewer task: the checklist is in its rules. Add 2-4 questions about the riskiest part, paste the spec section
   and the diff, and `--include` each changed file.
 
 ## Review (always, by you)
-- `git status` / diff: only the named files changed (check even after a timeout: files often exist).
-  With `--files`, the summary's `NOT IN --files` line already lists what fell outside.
-- The `check:` line in the summary is `check_one`, really run by the script: trust it over the worker's report.
+- Summary first: `files:` (with +/- line counts), `NOT IN --files`, and `check:`, which the script really ran: trust
+  it over the worker's report. Check `git status` even after a timeout.
 - Run `check_all` from `PROJECT.md`. If it is empty, read the result against the spec yourself.
 - Worker tests can be wrong: decide whether the test or the work is wrong.
 - Reviewer findings are often wrong: verify each before acting. Fact-check every number a scribe writes.
@@ -109,13 +65,14 @@ python agent/delegate.py --role builder --task-file .worker/t1.md --part shop --
 
 ## Keeping the setup up to date
 - New measurement or lesson → `agent/NOTES.md` (rules at its top).
-- A model gets better/worse or a limit changes → `agent/MODELS.md`, and the `models:` lines of the affected roles.
-- User adds a tool or key → run `agent/check_setup.py` again.
+- A model gets better/worse → `agent/MODELS.md` and the `models:` lines of the affected roles. A new model, provider
+  or limit → `agent/models.json`. Rate models with `python agent/bench.py --workers <worker> ...`.
+- User adds a tool or key → run `python agent/check_setup.py` again.
+- Tests for the scripts: `python -m unittest discover -s agent/tests`.
 
 ## Gotchas
 - agy loads `AGENTS.md` / `GEMINI.md` into every worker as rules: never create them here.
-- agy plan mode (`--mode plan`) makes workers write plans and wait: never use it for workers.
 - The check command runs outside the worker sandbox, as you: it comes from `PROJECT.md`, never from a worker.
-- Linux/macOS: same commands (`python3` if `python` is missing, also inside `check_one`); not yet tested on a real Linux machine.
-- Tests for the scripts themselves: `python -m unittest discover -s agent/tests`.
-- `agy` or `copilot` not found right after installing: the shell's PATH is stale; tell the user to restart the app.
+- `python3` if `python` is missing (also inside `check_one`). `agy` or `copilot` not found right after installing:
+  the PATH is stale, tell the user to restart the app.
+- Never `--dangerously-skip-permissions`, never agy `--mode plan` for workers.
