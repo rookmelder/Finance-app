@@ -54,6 +54,14 @@ python agent/delegate.py --role builder --task-file .worker/t1.md --part shop --
 - Reviewer task: the checklist is in its rules. Add 2-4 questions about the riskiest part, paste the spec section
   and the diff, and `--include` each changed file.
 
+## Knowledge map (`knowledge/`)
+Small linked notes instead of reading the codebase: `knowledge/README.md` → topic index → the one note you need.
+- Before planning a piece, read its system note: it names the files to `--include`. Give workers that note too.
+- After a piece is committed, its system note must match: new or changed via a scribe (`--files <the note>
+  --include <the note> <changed files>`, template in `templates/notes/`); you fact-check every path and add the
+  index line. A lesson → a finding note, a real choice → a decision note. One thing per note, never append.
+- `python agent/check_docs.py` before every commit (broken links, orphans, missing files). Tiny projects may skip.
+
 ## Review (always, by you)
 - Summary first: `files:` (with +/- line counts), `NOT IN --files`, and `check:`, which the script really ran: trust
   it over the worker's report. Check `git status` even after a timeout.
@@ -64,7 +72,7 @@ python agent/delegate.py --role builder --task-file .worker/t1.md --part shop --
 - Tell the user which roles/models did what and what you changed after review.
 
 ## Keeping the setup up to date
-- New measurement or lesson → `agent/NOTES.md` (rules at its top).
+- New measurement or lesson about the setup → a new note in `agent/notes/` + one line in its `README.md`.
 - A model gets better/worse → `agent/MODELS.md` and the `models:` lines of the affected roles. A new model, provider
   or limit → `agent/models.json`. Rate models with `python agent/bench.py --workers <worker> ...`.
 - User adds a tool or key → run `python agent/check_setup.py` again.

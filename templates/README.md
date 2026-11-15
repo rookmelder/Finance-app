@@ -3,6 +3,7 @@
 Starting points the Lead copies into the project. Nothing here is used directly by `delegate.py`.
 
 - `roles/ROLE-TEMPLATE.md`: how to make a new worker role (copy to `agent/roles/<name>.md`).
+- `notes/`: templates for knowledge notes (system, finding, decision): copy into `knowledge/<kind>s/`.
 - `packs/<type>/`: a pack per kind of project. Each has `pack.md` (what a good goal covers, check commands,
   worker notes, pitfalls, how to split the work) and `roles/` (extra roles for that kind of work).
 

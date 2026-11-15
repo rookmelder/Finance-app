@@ -130,6 +130,15 @@ Every step a model takes resends the whole conversation (the API has no memory),
 workers get only the tools their role needs, short rules, the files they need pasted in up front, and they only
 run their own check. On a test job this saved 38-59% of the tokens at the same quality.
 
+## The knowledge map
+
+Big projects get too large to read in one go, for Claude and for the workers. So the project keeps a map in
+`knowledge/`: one small note per part ("what the shop does, which files, what it talks to, why it's built that
+way"), per lesson learned, and per decision. Indexes link them, one line each. Claude reads the index, then only
+the one note it needs, and hands that note to a worker instead of half the code. A cheap scribe worker updates
+the notes after each change; Claude checks them. The folder also opens as an Obsidian vault (graph view
+included), and `grep -rh "^> " knowledge` prints the whole map in one screen.
+
 ## The files
 
 | File / folder | What it is |
@@ -145,9 +154,11 @@ run their own check. On a test job this saved 38-59% of the tokens at the same q
 | `agent/models.json` | The models, providers and limits `delegate.py` knows. Add a provider here, no code needed. |
 | `agent/bench.py` | Rates your own models: small tasks, scored with tests the worker never sees. |
 | `agent/START.md` | The steps Claude follows at the start of a project. |
-| `agent/NOTES.md` | Measurements and lessons learned (starts empty). |
+| `agent/notes/` | Measurements and lessons about the setup itself, one small note each. |
+| `knowledge/` | The project's knowledge map: one small note per part, lesson or decision (see below). |
+| `agent/check_docs.py` | Checks the notes: broken links, notes nobody links to, file paths that no longer exist. |
 | `agent/setup/` | How to install each tool and get each key. |
-| `templates/` | Role template and project packs. |
+| `templates/` | Role template, project packs and note templates. |
 | `.agents/agents/` | Trimmed tool sets for agy workers (your own agy chats are not affected). |
 | `.env` / `.env.example` | Your API keys (never committed) / the empty template. |
 | `.worker/` | Scratch space for tasks, results and the OpenAI usage counter (not committed). |

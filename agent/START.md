@@ -18,7 +18,10 @@ Read this once per project. Do the steps in order; skip what is already done.
    while it is empty, only agy workers run.
 6. **Models (optional).** `agent/MODELS.md` holds the template author's ratings. To rate the models this user has,
    run `python agent/bench.py --workers <worker> ...` and update `agent/MODELS.md` and the `models:` lines.
-7. **Repo.** The project's files live inside this folder (e.g. `src/`, `design/`): `delegate.py` uses this
+7. **Knowledge map.** `knowledge/` holds the project's map (one small note per system, finding or decision,
+   see `knowledge/README.md`). Keep it for anything bigger than a few files; for a tiny project ask the user
+   whether to delete it. Existing code? Make one system note per part before the first task.
+8. **Repo.** The project's files live inside this folder (e.g. `src/`, `design/`): `delegate.py` uses this
    folder's git status to see what a worker changed. If `origin` still points at the template repo, ask the user
    for the project's own repo URL.
 
@@ -35,7 +38,9 @@ Read this once per project. Do the steps in order; skip what is already done.
 | `agent/bench.py`, `agent/bench/` | template | Rates worker models with small tasks and hidden tests. |
 | `agent/MODELS.md` | you | Which model to pick per role, with ratings. |
 | `agent/LIMITS.md` | you | What each provider costs, its free limits and its quirks. |
-| `agent/NOTES.md` | you | What we measured and learned. |
+| `agent/notes/` | you | What we measured and learned about the setup: one note per entry, index in its `README.md`. |
+| `knowledge/` | you + scribe | The project's knowledge map: small linked notes per system, finding, decision. |
+| `agent/check_docs.py` | template | Checks `knowledge/` and `agent/notes/`: broken links, orphans, missing files. |
 | `agent/setup/` | template | How to install each tool and get each key (point the user here). |
-| `templates/` | template | `roles/ROLE-TEMPLATE.md` and project packs (`packs/<type>/`). |
+| `templates/` | template | `roles/ROLE-TEMPLATE.md`, project packs (`packs/<type>/`), note templates (`notes/`). |
 | `README.md` | template | The whole setup explained for the user in plain words. |
