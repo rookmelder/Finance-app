@@ -95,7 +95,8 @@ Each pack says what a good goal should cover, how to check the work, how to spli
 3. It starts the worker with **only the tools its role allows**, inside a **sandbox**: it can't touch anything outside
    the project, can't use git, can't browse the web, can't run commands.
 4. The worker does its piece and ends with a short report. Then `delegate.py` runs the project's check command on
-   that piece. If it fails, the worker gets the output once to fix it, and the check runs again.
+   that piece. If it fails, the worker gets the output to fix it, and the check runs again (a second time only if the
+   first fix changed the failure: a worker that is stuck goes back to Claude).
 5. Claude checks: did it only touch the allowed files? Does the full check pass? Is the work right?
    Then Claude fixes, asks a reviewer, and commits.
 

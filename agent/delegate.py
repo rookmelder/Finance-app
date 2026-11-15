@@ -12,7 +12,8 @@ Each role has a worker chain; workers missing on this machine (SETUP.md) are ski
 provider error (429/503/no capacity) it retries once, then moves on. --model / --provider force one worker.
 Models, providers and limits live in agent/models.json.
 Workers run no commands. For builder/tester roles this script runs check_one itself after the worker is done
-(--part fills {name}); when it fails, the worker gets the output once to fix it, then the check runs again.
+(--part fills {name}); when it fails, the worker gets the output to fix it, then the check runs again
+(a second round only if the first one changed the failure).
 For reviewer roles the check runs first and its result is pasted into the task.
 A reviewer with --include (or a scribe writing one .md file) on an API model runs as ONE plain API call: no harness, no tools.
 --files names what the task may change: with workers in parallel, each run then reports only its own files.
@@ -55,6 +56,7 @@ OPENAI_RUN_CAP = _plain(CONFIG['openai_run_cap'])      # max tokens per single r
 MAX_CALLS = int(CONFIG.get('max_calls') or 40)         # Copilot workers: stop a run after this many model calls
 TRANSIENT = re.compile(r'429|503|UNAVAILABLE|RESOURCE_EXHAUSTED|capacity|rate limit|overloaded|timed out')
 LABELS = {0: 'OK', 3: 'TIMEOUT (check git status)', 4: 'BLOCKED', 5: 'EMPTY', 6: 'PROVIDER ERROR', 7: 'CHECK FAILED'}
+MAX_RETRY_WAIT = 120   # a provider asking for a longer wait: go to the next worker instead
 CHECK_TAIL_LINES, CHECK_TAIL_CHARS = 60, 6000   # how much check output a worker / the summary gets
 
 
@@ -186,6 +188,17 @@ def copilot_tools(base, check_dir):
     }[base]
 
 
+def retry_wait(error):
+    """Seconds to wait before retrying a busy provider: what its error asks for (Retry-After, Gemini's retryDelay,
+    "retry in 17s"), else 20. None = it asks for more than MAX_RETRY_WAIT: don't retry, try the next worker."""
+    m = re.search(r'retry[ _-]?after\W{0,4}(\d+(?:\.\d+)?)|retryDelay\W{0,4}(\d+(?:\.\d+)?)s|'
+                  r'(?:retry|try again) in (\d+(?:\.\d+)?)\s*s', str(error or ''), re.I)
+    if not m:
+        return 20
+    wait = float(next(g for g in m.groups() if g))
+    return None if wait > MAX_RETRY_WAIT else int(wait + 0.999) + 1
+
+
 def check_command(check_one, part):
     """check_one with {name} filled in -> (command, ''), or (None, why it can't run)."""
     cmd = (check_one or '').strip()
@@ -206,6 +219,12 @@ def check_text(check):
     return f"{head} | `{check['cmd']}`"
 
 
+def failure_key(check):
+    """The check output without what changes on every run (timings, addresses): equal keys = no progress."""
+    out = re.sub(r'\d+(\.\d+)?\s*(s|ms|sec|seconds)\b', '', check.get('output') or '')
+    return re.sub(r'0x[0-9a-fA-F]+', '', out).strip()
+
+
 def fix_prompt(base, check):
     who = ('If a test is wrong, fix the test. If the work itself is wrong, change nothing and list it under Failures.'
            if base == 'tester' else 'Fix the real cause, only in the files your task names.')
@@ -222,16 +241,19 @@ def build_prompt(task, base, role, role_body, rules, proj, notes, includes, conv
                    f"Output (last lines):\n```\n{check['output']}\n```")
         elif base in ('builder', 'tester') and proj['check_one']:
             how = ("Run no commands. When you are done, the Lead's script runs the check on your part "
-                   f"(`{proj['check_one']}`). If it fails you get the output once to fix it.")
+                   f"(`{proj['check_one']}`). If it fails you get the output to fix it.")
         elif base == 'builder':
             how = 'This project has no check command: run no commands. Re-read your files against the spec instead.'
         else:
             how = 'Run no commands.'
         task = rules + f"\n---\n# PROJECT\n{how}{chr(10) + notes if notes else ''}\n\n---\n# YOUR TASK\n\n" + task
-    for f in includes:
-        lines = read_text(f).splitlines()
-        body = '\n'.join(f'{n:>4}  {line}' for n, line in enumerate(lines, 1))
-        task += f'\n\n## File: {f} (line numbers added; do not copy them)\n```\n{body}\n```'
+    for f in includes:   # line numbers only for a reviewer (it quotes lines); they cost ~12% more tokens on every call
+        text = read_text(f).rstrip('\n')
+        if base == 'reviewer':
+            body = '\n'.join(f'{n:>4}  {line}' for n, line in enumerate(text.splitlines(), 1))
+            task += f'\n\n## File: {f} (line numbers added; do not copy them)\n```\n{body}\n```'
+        else:
+            task += f'\n\n## File: {f}\n```\n{text}\n```'
     if includes:
         task += "\n\nThe files above are current. Don't re-read them; read others only if the task needs them."
     return task
@@ -459,26 +481,40 @@ def invoke_agy(w, ctx):
 
 
 # --- Copilot + cloud API ----------------------------------------------------------------------
+class LogTokens:
+    """Copilot writes token counts only to its debug log (also while running). read() reads only what is new
+    since the last read, up to the last full line (the log can be many MB; the cap checks it every 3 s)."""
+
+    def __init__(self, log_dir):
+        self.log_dir, self.pos = str(log_dir), {}
+        self.r = {'in': 0, 'out': 0, 'cached': 0, 'calls': 0}
+        self.last_in = self.last_out = 0
+
+    def read(self, final=False):
+        r = self.r
+        for f in sorted(glob.glob(os.path.join(self.log_dir, '*.log'))):
+            try:
+                with open(f, 'rb') as fh:
+                    fh.seek(self.pos.get(f, 0))
+                    data = fh.read()
+            except OSError:
+                continue
+            cut = len(data) if final else data.rfind(b'\n') + 1
+            self.pos[f] = self.pos.get(f, 0) + cut
+            text = data[:cut].decode('utf-8', errors='replace')
+            for v in re.findall(r'"prompt_tokens": (\d+)', text):
+                self.last_in = int(v)
+                r['in'] += self.last_in
+                r['calls'] += 1
+            for v in re.findall(r'"completion_tokens": (\d+)', text):
+                self.last_out = int(v)
+                r['out'] += self.last_out
+            r['cached'] += sum(int(v) for v in re.findall(r'"cached_tokens": (\d+)', text))
+        return dict(r, last=self.last_in + self.last_out, total=r['in'] + r['out'])   # last = size of the latest call
+
+
 def log_tokens(log_dir):
-    """Copilot writes token counts only to its debug log (also while running)."""
-    r = {'in': 0, 'out': 0, 'cached': 0, 'last': 0, 'calls': 0}
-    last_in = last_out = 0
-    for f in sorted(glob.glob(os.path.join(str(log_dir), '*.log'))):
-        try:
-            text = Path(f).read_text(encoding='utf-8', errors='replace')
-        except OSError:
-            continue
-        for v in re.findall(r'"prompt_tokens": (\d+)', text):
-            last_in = int(v)
-            r['in'] += last_in
-            r['calls'] += 1
-        for v in re.findall(r'"completion_tokens": (\d+)', text):
-            last_out = int(v)
-            r['out'] += last_out
-        r['cached'] += sum(int(v) for v in re.findall(r'"cached_tokens": (\d+)', text))
-    r['last'] = last_in + last_out   # size of the latest call
-    r['total'] = r['in'] + r['out']
-    return r
+    return LogTokens(log_dir).read(final=True)
 
 
 def openai_tier(model):
@@ -576,7 +612,9 @@ def invoke_direct(w, ctx):
         if not o['response']:
             o['code'] = 5
     except urllib.error.HTTPError as e:
-        o['code'], o['error'] = 6, f"{e.code} {e.read().decode('utf-8', errors='replace')[:300]}"
+        after = e.headers.get('Retry-After') if e.headers else None
+        o['code'], o['error'] = 6, (f'{e.code} ' + (f'retry-after {after} ' if after else '')
+                                    + e.read().decode('utf-8', errors='replace')[:300])
     except (TimeoutError, OSError, ValueError) as e:   # URLError is an OSError
         timed_out = 'timed out' in str(e).lower()
         o['code'], o['error'] = (3 if timed_out else 6), f'{type(e).__name__}: {e}'
@@ -634,8 +672,10 @@ def invoke_copilot(w, ctx):
     stopped = []
     calls_left = getattr(ctx, 'calls_left', None) or a.max_calls   # a fix round only gets what the first run left
 
+    log = LogTokens(log_dir)
+
     def over_cap():   # tokens: look one call ahead, calls only grow (history is resent)
-        lt = log_tokens(log_dir)
+        lt = log.read()
         if cap > 0 and lt['total'] + lt['last'] >= cap:
             stopped.append(f'STOPPED: OpenAI token cap {cap} reached during the run (free-tier guard).')
         elif calls_left and lt['calls'] >= calls_left:
@@ -644,7 +684,7 @@ def invoke_copilot(w, ctx):
 
     text, why = run_tool(cmd, stdin_bytes=ctx.task.encode('utf-8'), env=env, timeout=a.timeout_sec, watch=over_cap)
     p = parse_copilot_events(text)
-    tok = log_tokens(log_dir)
+    tok = log.read(final=True)
     shutil.rmtree(log_dir, ignore_errors=True)
     o = {'worker': f"{w['p']} {model}", 'conversation_id': p['conversation_id'], 'response': p['response'], 'error': p['error'],
          'calls': p['calls'], 'input_tokens': tok['in'], 'cache_read_tokens': tok['cached'], 'output_tokens': tok['out'],
@@ -669,7 +709,7 @@ def parse_args(argv):
     ap.add_argument('--task-file', help='file with the task')
     ap.add_argument('--role', default='builder', help='any agent/roles/<name>.md (default builder)')
     ap.add_argument('--include', nargs='+', default=[], metavar='FILE',
-                    help='files appended to the prompt with line numbers (saves exploring calls)')
+                    help='files appended to the prompt (saves exploring calls); a reviewer gets line numbers')
     ap.add_argument('--model', choices=AGY_MODELS, help='force one agy worker (no chain, no fallback)')
     ap.add_argument('--provider', choices=list(PROVIDERS), help='force one Copilot+API worker')
     ap.add_argument('--provider-model', help='model id for --provider')
@@ -680,8 +720,8 @@ def parse_args(argv):
                     help='the files (or globs) this task may change; other changes are listed apart')
     ap.add_argument('--part', metavar='NAME', help='the part this task is about: fills {name} in check_one')
     ap.add_argument('--no-check', action='store_true', help='do not run check_one for this task')
-    ap.add_argument('--fix-rounds', type=int, choices=(0, 1, 2), default=1,
-                    help='how often a failing check goes back to the worker (default 1)')
+    ap.add_argument('--fix-rounds', type=int, choices=(0, 1, 2), default=2,
+                    help='how often a failing check goes back to the worker (default 2; round 2 only if round 1 changed the failure)')
     ap.add_argument('--no-direct', action='store_true',
                     help='reviewer/scribe on an API model: use the Copilot harness even when one plain API call would do')
     ap.add_argument('--max-calls', type=int, default=MAX_CALLS, help=f'Copilot workers: stop after this many model calls (default {MAX_CALLS})')
@@ -794,16 +834,22 @@ def main(argv=None):
             # With --files, another worker's changes elsewhere don't count as this worker's.
             changed = bool(split_scope(changed_since(before, git_snapshot(ROOT)), a.files)[0])
             transient = res['code'] == 6 and not changed and TRANSIENT.search(str(res.get('error') or ''))
-            if not transient or attempt == 2:
+            wait = retry_wait(res.get('error')) if transient else None
+            if not transient or attempt == 2 or wait is None:
                 break
-            time.sleep(20)
+            time.sleep(wait)
         if res['code'] != 6 or changed:
             break
 
     # Builder/tester: run the check now; while it fails the same worker gets the output (--fix-rounds times).
     if check_cmd and base in ('builder', 'tester') and res['code'] in (0, 3):
         check, rounds = run_check(check_cmd, a.check_timeout_sec), 0
+        last_key = None
         while not check['passed'] and res['code'] == 0 and res.get('conversation_id') and rounds < a.fix_rounds:
+            if rounds and failure_key(check) == last_key:   # a 2nd round only when the 1st one changed the failure
+                res['error'] = f'no fix round {rounds + 1}: the check failed the same way after round {rounds}.'
+                break
+            last_key = failure_key(check)
             if isinstance(res.get('calls'), int) and a.max_calls:   # the call cap is for the whole run
                 ctx.calls_left = a.max_calls - res['calls']
                 if ctx.calls_left <= 0:

@@ -95,8 +95,10 @@ class Prompt(unittest.TestCase):
             self.assertTrue(p.startswith('BASE RULES\n\n## Your role: builder\nRole rule.\n'))
             self.assertIn('`python -m unittest`', p)
             self.assertIn('- note\n\n---\n# YOUR TASK\n\nDo X.', p)
-            self.assertIn('   1  a = 1\n   2  b = 2\n```', p)
+            self.assertIn('## File: ' + f.name + '\n```\na = 1\nb = 2\n```', p)   # a builder gets no line numbers
             self.assertTrue(p.endswith("only if the task needs them."))
+            r = d.build_prompt('Do X.', 'reviewer', 'reviewer', '', 'R', proj, '', [f.name], None)
+            self.assertIn('   1  a = 1\n   2  b = 2\n```', r)
         finally:
             os.unlink(f.name)
 
@@ -140,20 +142,41 @@ class Check(unittest.TestCase):
         slow = d.run_check('python -c "import time; time.sleep(30)"', 1)
         self.assertEqual((slow['passed'], slow['timed_out']), (False, True))
 
+    def test_second_fix_round_only_on_progress(self):
+        calls = []
+
+        def fake(w, ctx):   # every call gets one step further; the check passes at step 3
+            calls.append(1)
+            Path(d.ROOT, 'n.txt').write_text(str(len(calls)), encoding='utf-8')
+            return {'worker': 'agy fake', 'code': 0, 'conversation_id': 'c1', 'response': 'r', 'calls': '?', 'denied': []}
+
+        check = 'python -c "import sys; n=open(\'{name}.txt\').read(); print(\'step\', n, \'in 0.01s\'); sys.exit(0 if n==\'3\' else 1)"'
+        code, last, out = self.run_main(fake, ['--part', 'n'], check=check)
+        self.assertEqual((code, len(calls), last['check']['fix_rounds']), (0, 3, 2))
+        self.assertEqual(d.failure_key({'output': 'Ran 3 tests in 0.012s\nat 0x7f3a'}), d.failure_key({'output': 'Ran 3 tests in 1.5s\nat 0x1b'}))
+        self.assertNotEqual(d.failure_key({'output': 'step 1'}), d.failure_key({'output': 'step 2'}))
+
+    def test_retry_wait(self):
+        self.assertEqual(d.retry_wait('429 Too Many Requests'), 20)
+        self.assertEqual(d.retry_wait('429 retry-after 7 {"error"}'), 8)
+        self.assertEqual(d.retry_wait('RESOURCE_EXHAUSTED "retryDelay": "17s"'), 18)
+        self.assertEqual(d.retry_wait('rate limit: please try again in 2.5s'), 4)
+        self.assertIsNone(d.retry_wait('429 retry-after 3600'))
+        self.assertEqual(d.retry_wait(None), 20)
+
     def test_fix_prompt(self):
         check = {'cmd': 'c', 'passed': False, 'exit': 1, 'timed_out': False, 'output': 'boom'}
         self.assertIn('boom', d.fix_prompt('builder', check))
         self.assertIn('change nothing', d.fix_prompt('tester', check))
 
-    def run_main(self, fake, extra=()):
+    def run_main(self, fake, extra=(), check=None):
         """main() in a temp project whose check passes once ok.txt exists; the worker is faked."""
         import contextlib
         import io
         old = (d.ROOT, d.invoke_agy, os.getcwd())
         with tempfile.TemporaryDirectory() as t:
-            Path(t, 'PROJECT.md').write_text(
-                '```settings\ncheck_one: python -c "import os,sys; sys.exit(0 if os.path.exists(\'{name}.txt\') else 1)"\n```\n',
-                encoding='utf-8')
+            check = check or 'python -c "import os,sys; sys.exit(0 if os.path.exists(\'{name}.txt\') else 1)"'
+            Path(t, 'PROJECT.md').write_text(f'```settings\ncheck_one: {check}\n```\n', encoding='utf-8')
             d.ROOT, d.invoke_agy = Path(t), fake
             out = io.StringIO()
             try:
@@ -198,11 +221,11 @@ class Check(unittest.TestCase):
         self.assertIn('[CHECK FAILED]', out)
         code, last, _ = self.run_main(fake, ['--part', 'ok', '--fix-rounds', '0'])
         self.assertEqual((code, len(calls)), (7, 3))
-        code, last, out = self.run_main(fake, ['--part', 'ok', '--fix-rounds', '2'])
-        self.assertEqual((code, len(calls), last['check']['fix_rounds']), (7, 6, 2))
-        self.assertIn('after 2 fix rounds', out)
+        code, last, out = self.run_main(fake, ['--part', 'ok', '--fix-rounds', '2'])   # same failure twice: stop after 1
+        self.assertEqual((code, len(calls), last['check']['fix_rounds']), (7, 5, 1))
+        self.assertIn('no fix round 2: the check failed the same way', out)
         code, last, out = self.run_main(lambda w, ctx: dict(fake(w, ctx), calls=5), ['--part', 'ok', '--max-calls', '5'])
-        self.assertEqual((code, len(calls)), (7, 7))   # call cap used up: no fix round
+        self.assertEqual((code, len(calls)), (7, 6))   # call cap used up: no fix round
         self.assertIn('no fix round', out)
         code, last, out = self.run_main(fake)   # no --part: {name} can't be filled, so no check
         self.assertEqual(code, 0)
@@ -358,6 +381,21 @@ class Results(unittest.TestCase):
             r = d.log_tokens(t)
             self.assertEqual((r['in'], r['out'], r['cached'], r['last'], r['total'], r['calls']), (300, 12, 50, 207, 312, 2))
         self.assertEqual(d.log_tokens(Path(t) / 'gone')['total'], 0)
+
+    def test_log_tokens_reads_only_new_lines(self):
+        with tempfile.TemporaryDirectory() as t:
+            f = Path(t, 'a.log')
+            f.write_text('"prompt_tokens": 100, "completion_tokens": 5\n"prompt_tok', encoding='utf-8')
+            log = d.LogTokens(t)
+            self.assertEqual((log.read()['in'], log.read()['calls']), (100, 1))   # the half line waits
+            with open(f, 'a', encoding='utf-8') as fh:
+                fh.write('ens": 200, "completion_tokens": 7\n')
+            r = log.read()
+            self.assertEqual((r['in'], r['out'], r['calls'], r['last']), (300, 12, 2, 207))
+            with open(f, 'a', encoding='utf-8') as fh:
+                fh.write('"prompt_tokens": 50')   # no newline at the end: only a final read takes it
+            self.assertEqual(log.read()['in'], 300)
+            self.assertEqual(log.read(final=True)['in'], 350)
 
     def test_openai_guard(self):
         self.assertEqual(d.openai_tier('o3'), 'big')

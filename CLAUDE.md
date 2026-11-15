@@ -35,7 +35,7 @@ Max 4 workers at once: 2 on agy + 1 NVIDIA + 1 Gemini API (fewer if `SETUP.md` h
 python agent/delegate.py --role builder --task-file .worker/t1.md --part shop --files src/shop.py tests/test_shop.py --include src/shop.py
 ```
 - `--part <name>`: fills `{name}` in `check_one`. The script runs that check after a builder/tester; a failure goes
-  back to the worker (`--fix-rounds`, default 1, max 2). For a reviewer the check runs first and is pasted into its task.
+  back to the worker (`--fix-rounds`, default 2; round 2 only if round 1 changed the failure). For a reviewer the check runs first and is pasted into its task.
 - `--files <files or globs>`: what the task may change. Always give it: the summary then lists this run's own files,
   and anything else under `NOT IN --files` (another worker's files, or this worker left its scope: check which).
 - `--include <files>`: pastes files into the task, so the worker spends no calls opening them.

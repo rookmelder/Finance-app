@@ -23,3 +23,4 @@ Not here: rules for the Lead or workers (`CLAUDE.md`, `agent/bases/`, `agent/rol
 - [Changed files per run, --files, run files (2026-11-15)](2026-11-15-changed-files-per-run.md): Content hashes, --files scope and one run file per run, after parallel runs mixed up their changes.
 - [Lighter guides, no-tools mode, caps, benchmark (2026-11-15)](2026-11-15-lighter-guides-no-tools-mode.md): Shorter CLAUDE.md, models.json, no-tools mode, call cap, private fails closed, bench.py.
 - [Builder benchmark with bench.py, chains reordered (2026-11-15)](2026-11-15-builder-benchmark.md): Two-task builder benchmark: agy flash-low best; Mistral Large 4 correct but slow, moved last.
+- [Quality-neutral optimizations (2026-11-15)](2026-11-15-quality-neutral-optimizations.md): Fix round 2 only on progress, line numbers only for reviewers, incremental log reads, provider retry waits; bench 88/88 before and after.
