@@ -69,9 +69,9 @@ Default models (all free, or covered by subscriptions you already have):
 
 | Role | 1st choice | 2nd | 3rd |
 |---|---|---|---|
-| builder | Gemini 3.8 Flash Low (agy) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
-| builderplus | Gemini 3.8 Flash Medium (agy) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
-| tester | Gemini Flash-Lite (Gemini API) | Mistral Large 4 (NVIDIA) | Nemotron Ultra (OpenRouter, free) |
+| builder | Gemini 3.8 Flash Low (agy) | Gemini Flash-Lite (Gemini API) | Nemotron Ultra (OpenRouter, free), then Mistral Large 4 (NVIDIA) |
+| builderplus | Gemini 3.8 Flash Medium (agy) | Nemotron Ultra (OpenRouter, free) | Mistral Large 4 (NVIDIA) |
+| tester | Gemini Flash-Lite (Gemini API) | Nemotron Ultra (OpenRouter, free) | Mistral Large 4 (NVIDIA) |
 | reviewer | Claude Sonnet 4.6 (agy) | o3 (OpenAI free tokens) | gpt-oss-120b (agy) |
 | scribe | Nemotron Lightning (NVIDIA) | Gemini 3.8 Flash Low (agy) | Nemotron Ultra (OpenRouter, free) |
 

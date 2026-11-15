@@ -67,7 +67,7 @@ Keep `CLAUDE.md` short by moving history and numbers here.
 - No-tools mode: a reviewer with `--include`, or a scribe writing one `.md`, on an API model is ONE plain API call
   (no Copilot). agy workers still use the agy CLI.
 - Call cap for every Copilot worker: `max_calls` 40 (models.json, `--max-calls`). OpenRouter Nemotron Ultra used ~60
-  requests per task in the old benchmark, so it will now be stopped: raise the cap for it or drop it from the chains.
+  requests per task in the old benchmark; in the new one (next entry) it needed 6-11, so the cap does not stop it.
 - `--fix-rounds 0|1|2` replaces `--no-fix`.
 - Private mode fails closed: anything but `private: no` in PROJECT.md's settings means agy only.
 - Copilot workers: deny rules for reading and writing `.env` (tested: a worker asked to open `.env` was denied).
@@ -81,3 +81,21 @@ Keep `CLAUDE.md` short by moving history and numbers here.
   - bench, NVIDIA Mistral Large 4 on textkit: 12/12 hidden tests but TIMEOUT at 480 s after 4 calls (slow NVIDIA day),
     own check failed (it timed out before its test file was right). Prompt on stdin worked.
 - Untested: the call cap and a second fix round with a real worker (unit tests only); tester role; Linux.
+
+## Builder benchmark with bench.py, chains reordered (2026-11-15)
+Two tasks (inventory 10 hidden tests, textkit 12), one run each, Windows, through `agent/bench.py`.
+| Worker | Hidden tests | Seconds (inventory / textkit) | Calls | Tokens in |
+|---|---|---|---|---|
+| agy gemini-3.8-flash-low | 22/22 | 23 / 31 | ? | 8.8k / 15.1k |
+| Gemini API gemini-flash-lite-latest | 22/22 | 25 / 46 | 4 / 7 | 32k / 60k |
+| OpenRouter nemotron-3-ultra:free | 22/22 | 78 / 260 | 6 / 11 | 49k / 95k |
+| NVIDIA mistral-large-4 | 22/22 | 307 / 482 (timeout) | 6 / 4 | 42k / 10k |
+| NVIDIA nemotron-3.5-lightning | 22/22 | 83 / 430 | 11 / 74 | 156k / 2.46M |
+| OpenRouter cohere north-mini-code:free | 10/22 | 111 / 11 | 43 / 5 | 337k / 18k |
+- Mistral Large 4 on NVIDIA is correct but takes 25-120 s per call: moved to the end of the builder, builderplus
+  and tester chains. Gemini API flash-lite is the new builder fallback after agy.
+- Nemotron Ultra needed 6-11 calls here, not the ~60 from the old benchmark: the 40-call cap does not stop it.
+- Nemotron lightning loops as a builder; the cap stopped its fix round at 40, but the first run had already used 34.
+  The cap now counts the whole run (a fix round only gets what is left).
+- One run per cell: times vary by day (NVIDIA especially). Tester and builderplus chains were reordered by these
+  builder numbers, not by a test of their own.

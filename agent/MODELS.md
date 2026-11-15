@@ -17,25 +17,29 @@ Cost, free limits and provider quirks: `LIMITS.md`. Read only the table of the r
 | #1 | Claude Opus 5.5 | Claude Code | Claude plan | 10 | T |
 
 ### Builder (one module/function + tests, from a spec)
+Measured 2026-11-15 with `agent/bench.py` (2 tasks, 22 hidden tests; time and tokens per task).
 | Priority | Model | Where | Cost | Rating | Basis | Why this spot |
 |---|---|---|---|---|---|---|
-| #1 | `gemini-3.8-flash-low` | agy | Pro quota | 8 | T | 11/11 on the benchmark, ~40k tokens/task, but slow (400-460 s) |
-| #2 | `mistralai/mistral-large-4-1t-a52b` | NVIDIA | free | 8 | T | 2/2 correct in the 2nd benchmark, 7 calls, ~70k tokens, 250-300 s |
-| #4 | `gpt-5.4-mini` | OpenAI | free (2.5M/day) | 3 | T | 0/4 via Copilot: writes files through the shell (blocked), ignores the rule |
-| #5 | `gpt-5-mini` | OpenAI | free (2.5M/day, shared with #4) | 3 | R | Same family habit as #4 expected; untested |
-| #3 | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter | free (1000 req/day) | 6 | T | Correct, but ~60 requests per task |
-| #6 | `cohere/north-mini-code:free` | OpenRouter | free | 5 | R | Code-tuned, small |
-| #7 | `anthropic/claude-haiku-5.5` | OpenRouter | ~$0.012/task | 7 | R | Paid: only when all free options are throttled |
-| #8 | `deepseek/deepseek-v4-flash` | OpenRouter | ~$0.010/task | 6 | R | Paid backup |
-| #9 | `qwen/qwen3-coder-next` | OpenRouter | ~$0.015/task | 6 | R | Paid backup |
+| #1 | `gemini-3.8-flash-low` | agy | Pro quota | 9 | T | 22/22, 23-31 s, 9-15k tokens |
+| #2 | `gemini-flash-lite-latest` | Gemini API | free (~500 req/day) | 8 | T | 22/22, 25-46 s, 4-7 calls, 32-60k tokens. Also the tester's main model: if the builder ended here, force another tester |
+| #3 | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter | free (1000 req/day) | 7 | T | 22/22, 78-260 s, 6-11 calls, 49-95k tokens |
+| #4 | `mistralai/mistral-large-4-1t-a52b` | NVIDIA | free | 6 | T | 22/22 but 307 s and a 480 s timeout (25-120 s per call): last resort |
+| - | `nvidia/nemotron-3.5-lightning-30b-a3b` | NVIDIA | free | 2 | T | 22/22 but loops: 74 calls and 2.46M tokens on one task. Not as a builder (fine as a no-tools scribe) |
+| - | `cohere/north-mini-code:free` | OpenRouter | free | 2 | T | 10/22: looped to the call cap on one task, provider error 400 on the other |
+| - | `gpt-5.4-mini` | OpenAI | free (2.5M/day) | 3 | T | 0/4 via Copilot in the old benchmark: tried to write files through the shell. Not re-tested since workers lost the shell |
+| - | `gpt-5-mini` | OpenAI | free (2.5M/day, shared) | 3 | R | Same family habit expected; untested |
+| - | `anthropic/claude-haiku-5.5` | OpenRouter | ~$0.012/task | 7 | R | Paid: only when all free options are throttled |
+| - | `deepseek/deepseek-v4-flash` | OpenRouter | ~$0.010/task | 6 | R | Paid backup |
+| - | `qwen/qwen3-coder-next` | OpenRouter | ~$0.015/task | 6 | R | Paid backup |
 
 ### Builder+ (multi-file changes, refactors, tricky logic)
+Not measured by `bench.py` (its tasks are single-file); the order of #2 and #3 follows their speed as builders.
 | Priority | Model | Where | Cost | Rating | Basis | Why this spot |
 |---|---|---|---|---|---|---|
 | #1 | `gemini-3.8-flash-medium` | agy | Pro quota | 7 | T | More thinking than low, no overthinking |
-| #2 | `mistralai/mistral-large-4-1t-a52b` | NVIDIA | free | 8 | T | 2/2 on the builder benchmark |
-| #3 | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter | free (1000 req/day) | 6 | T | Correct, but many requests |
-| #4 | `gpt-5.4` | OpenAI | free (250k/day: ~3-10 tasks) | 5 | R | GPT family wrote files via the shell in our test: not in the chain |
+| #2 | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter | free (1000 req/day) | 7 | T | 22/22 as a builder, 78-260 s |
+| #3 | `mistralai/mistral-large-4-1t-a52b` | NVIDIA | free | 6 | T | Correct but 5 minutes or a timeout per task |
+| #4 | `gpt-5.4` | OpenAI | free (250k/day: ~3-10 tasks) | 5 | R | GPT family wrote files via the shell in our old test: not in the chain |
 | #5 | `gpt-5.2` | OpenAI | free (250k/day, shared with #4) | 5 | R | Same budget and habit |
 | #6 | `gpt-4.1` | OpenAI | free (250k/day, shared) | 5 | R | Same budget, older |
 | #7 | `openrouter/pareto-code` | OpenRouter | paid, varies | 7 | R | Router that picks a top coding model; for a rare hard task |

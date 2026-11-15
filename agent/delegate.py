@@ -632,13 +632,14 @@ def invoke_copilot(w, ctx):
         run_cap = int(os.environ.get('DELEGATE_OPENAI_RUN_CAP') or OPENAI_RUN_CAP[guard['tier']])   # env: for testing
         cap = min(int(0.9 * guard['limit']) - guard['used'], run_cap)
     stopped = []
+    calls_left = getattr(ctx, 'calls_left', None) or a.max_calls   # a fix round only gets what the first run left
 
     def over_cap():   # tokens: look one call ahead, calls only grow (history is resent)
         lt = log_tokens(log_dir)
         if cap > 0 and lt['total'] + lt['last'] >= cap:
             stopped.append(f'STOPPED: OpenAI token cap {cap} reached during the run (free-tier guard).')
-        elif a.max_calls and lt['calls'] >= a.max_calls:
-            stopped.append(f'STOPPED: {lt["calls"]} model calls, the cap is {a.max_calls} (loop guard; --max-calls or agent/models.json).')
+        elif calls_left and lt['calls'] >= calls_left:
+            stopped.append(f'STOPPED: the run reached its cap of {a.max_calls} model calls (loop guard; --max-calls or agent/models.json).')
         return bool(stopped)
 
     text, why = run_tool(cmd, stdin_bytes=ctx.task.encode('utf-8'), env=env, timeout=a.timeout_sec, watch=over_cap)
@@ -803,6 +804,11 @@ def main(argv=None):
     if check_cmd and base in ('builder', 'tester') and res['code'] in (0, 3):
         check, rounds = run_check(check_cmd, a.check_timeout_sec), 0
         while not check['passed'] and res['code'] == 0 and res.get('conversation_id') and rounds < a.fix_rounds:
+            if isinstance(res.get('calls'), int) and a.max_calls:   # the call cap is for the whole run
+                ctx.calls_left = a.max_calls - res['calls']
+                if ctx.calls_left <= 0:
+                    res['error'] = f'no fix round: the run already used its {a.max_calls} model calls (--max-calls).'
+                    break
             rounds += 1
             a.conversation, ctx.task = res['conversation_id'], fix_prompt(base, check)
             fix = invoke_agy(w, ctx) if w['h'] == 'agy' else invoke_copilot(w, ctx)

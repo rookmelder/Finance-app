@@ -201,6 +201,9 @@ class Check(unittest.TestCase):
         code, last, out = self.run_main(fake, ['--part', 'ok', '--fix-rounds', '2'])
         self.assertEqual((code, len(calls), last['check']['fix_rounds']), (7, 6, 2))
         self.assertIn('after 2 fix rounds', out)
+        code, last, out = self.run_main(lambda w, ctx: dict(fake(w, ctx), calls=5), ['--part', 'ok', '--max-calls', '5'])
+        self.assertEqual((code, len(calls)), (7, 7))   # call cap used up: no fix round
+        self.assertIn('no fix round', out)
         code, last, out = self.run_main(fake)   # no --part: {name} can't be filled, so no check
         self.assertEqual(code, 0)
         self.assertIn('check: not run', out)

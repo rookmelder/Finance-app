@@ -5,8 +5,8 @@
 
   "default_models": {
     "_about": "Used when a role file has no models: line.",
-    "builder": "agy:gemini-3.8-flash-low, nvidia, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free",
-    "tester": "gemini, nvidia, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free",
+    "builder": "agy:gemini-3.8-flash-low, gemini, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free, nvidia",
+    "tester": "gemini, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free, nvidia",
     "reviewer": "agy:claude-sonnet-4-6, openai:o3, agy:gpt-oss-120b-medium",
     "scribe": "nvidia:nvidia/nemotron-3.5-lightning-30b-a3b, agy:gemini-3.8-flash-low, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free"
   },

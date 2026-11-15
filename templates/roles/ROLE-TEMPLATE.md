@@ -1,6 +1,6 @@
 ---
 base: builder
-models: agy:gemini-3.8-flash-low, nvidia:mistralai/mistral-large-4-1t-a52b
+models: agy:gemini-3.8-flash-low, gemini:gemini-flash-lite-latest
 does: One line: what this role makes or checks.
 ---
 <!-- Copy this file to agent/roles/<name>.md and run it with: agent/delegate.py --role <name>
