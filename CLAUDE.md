@@ -78,6 +78,9 @@ Small linked notes instead of reading the codebase: `knowledge/README.md` → to
 - User adds a tool or key → run `python agent/check_setup.py` again.
 - Tests for the scripts: `python -m unittest discover -s agent/tests`.
 
+## Git
+- No AI attribution in commits, pushes or PRs: no `Co-Authored-By: Claude` lines, no "Generated with Claude Code".
+
 ## Gotchas
 - agy loads `AGENTS.md` / `GEMINI.md` into every worker as rules: never create them here.
 - The check command runs outside the worker sandbox, as you: it comes from `PROJECT.md`, never from a worker.
