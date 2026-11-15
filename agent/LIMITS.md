@@ -13,10 +13,9 @@ Which model to pick per role: `MODELS.md`. What `delegate.py` enforces: `models.
 | **OpenRouter** | Optional credit | `:free` models: **50 requests/day**, or **1000/day** once ≥$10 credit was ever bought; 20/min | Daily | Free models never touch the credit. Paid models and routers do |
 | **NVIDIA NIM** | Free | ~40 req/min, daily cap unclear | — | Free tier may log prompts. Some models 404/timeout for this account |
 | **Gemini API** (AI Studio) | Free | Flash-Lite ~15 req/min, ~500 req/day | Daily | Free tier trains on prompts. Separate from agy's quota |
-| **Ollama** (local) | Free | Unlimited | — | 8 GB VRAM: slow, text only. The only private option |
 
 **Privacy:** OpenAI's free tokens require sharing your prompts with OpenAI. Free tiers of NVIDIA,
-Gemini API and OpenRouter free models may log or train on prompts. **Private code: Claude, agy or Ollama only.**
+Gemini API and OpenRouter free models may log or train on prompts. **Private code: Claude or agy only.**
 
 **How the free OpenAI tokens count:** per day, across all models of a group together.
 A typical worker task through Copilot uses ~15-100k tokens. So the big group (250k) is ~3-10 tasks a day,
@@ -36,4 +35,3 @@ OpenAI's dashboard is the truth: platform.openai.com > Usage).
   included, bills your credit. A typical worker task ≈ 100k input + 4k output tokens. Paid prices per 1M
   tokens in/out: Claude Haiku 5.5 $0.10/$0.50, DeepSeek V4 Flash $0.09/$0.18, Qwen3 Coder Next
   $0.12/$0.80, GLM 5.3 Flash $0.04/$0.08, Qwen3.7 Flash $0.03/$0.13.
-- **Ollama**: `gemma4:12b` doesn't fully fit in 8 GB VRAM: slow, text only, you write the files.

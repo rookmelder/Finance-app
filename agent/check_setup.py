@@ -21,7 +21,6 @@ TOOLS = {
     'git': 'Required: tracks what workers change.',
     'agy': 'Google Antigravity CLI: runs Gemini and agy Claude/gpt-oss workers (needs a Google AI Pro plan for real quota).',
     'copilot': 'GitHub Copilot CLI: runs every API worker (NVIDIA, Gemini API, OpenRouter, OpenAI).',
-    'ollama': 'Optional: private local model.',
     'python': 'Only if the project uses Python.',
     'node': 'Only if the project uses JavaScript/TypeScript.',
 }
@@ -55,14 +54,6 @@ def has(cmd):
     return bool(shutil.which(cmd) or (cmd == 'python' and shutil.which('python3')))
 
 
-def ollama_models():
-    # Read the model folder instead of `ollama list`: that can start the Ollama server (hang).
-    man = Path(os.environ['OLLAMA_MODELS']) / 'manifests' if os.environ.get('OLLAMA_MODELS') else Path.home() / '.ollama' / 'models' / 'manifests'
-    if not has('ollama') or not man.exists():
-        return ''
-    return ', '.join(f'{p.parent.name}:{p.name}' for p in sorted(man.rglob('*')) if p.is_file())
-
-
 def test_key(key, url, header, prefix, body, timeout):
     req = urllib.request.Request(url, data=body, headers={header: prefix + key, 'Content-Type': 'application/json'},
                                  method='POST' if body else 'GET')
@@ -75,7 +66,7 @@ def test_key(key, url, header, prefix, body, timeout):
         return 'key FAILED (no answer)', False
 
 
-def build_md(rows, avail, models, now):
+def build_md(rows, avail, now):
     table = '\n'.join(f'| {i} | {s} | {n} |' for i, s, n in rows)
     block = '\n'.join(f"{k}: {'yes' if v else 'no'}" for k, v in avail.items())
     return f"""# Setup on this machine
@@ -86,8 +77,6 @@ Run it again after installing a tool or adding a key. How to set each one up: `a
 | Item | Status | Note |
 |---|---|---|
 {table}
-
-Ollama models: {models or 'none'}
 
 ## Available workers (read by delegate.py; "no" = skipped)
 ```available
@@ -126,8 +115,6 @@ def main(argv=None):
     for t, note in TOOLS.items():
         rows.append((t, 'found' if has(t) else 'missing', note))
     avail['agy'] = has('agy')
-    models = ollama_models()
-    avail['ollama'] = bool(models)
 
     for p, (key_name, url, header, prefix, body, timeout) in PROBES.items():
         k = os.environ.get(key_name) or keys.get(key_name)
@@ -141,7 +128,7 @@ def main(argv=None):
         rows.append((f'{p} API', status, note))
         avail[p] = ok and has('copilot')
 
-    md = build_md(rows, avail, models, datetime.datetime.now().strftime('%Y-%m-%d %H:%M'))
+    md = build_md(rows, avail, datetime.datetime.now().strftime('%Y-%m-%d %H:%M'))
     setup = ROOT / 'SETUP.md'
     md = keep_confirmed(md, read_text(setup) if setup.exists() else '')
     setup.write_text(md, encoding='utf-8', newline='\n')

@@ -15,7 +15,6 @@ and writes `SETUP.md`, and `delegate.py` then only uses workers that work on you
 | Gemini API key | Gemini Flash-Lite tester | Free | [api-keys.md](api-keys.md) |
 | OpenRouter key | Free fallback models (1000/day after a one-time $10) | Free models cost nothing | [api-keys.md](api-keys.md) |
 | OpenAI key | o3 reviewer on free daily tokens | Needs a small prepaid credit + data sharing | [api-keys.md](api-keys.md) |
-| Ollama | Private, local model | Free, needs a decent GPU | [ollama.md](ollama.md) |
 
 Works on Windows, Linux and macOS (use `python3` where `python` is not on the PATH).
 

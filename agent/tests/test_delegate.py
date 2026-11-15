@@ -499,9 +499,9 @@ class Bench(unittest.TestCase):
 
 class CheckSetup(unittest.TestCase):
     def test_keeps_confirmed_answers(self):
-        new = check_setup.build_md([('git', 'found', 'n')], {'agy': True, 'nvidia': False}, '', '2026-01-01 00:00')
+        new = check_setup.build_md([('git', 'found', 'n')], {'agy': True, 'nvidia': False}, '2026-01-01 00:00')
         self.assertIn('```available\nagy: yes\nnvidia: no\n```', new)
-        self.assertIn('Ollama models: none', new)
+        self.assertNotIn('Ollama', new)
         old = new.replace('<which plan>', 'Max')
         merged = check_setup.keep_confirmed(new, old)
         self.assertIn('- Claude plan: Max', merged)

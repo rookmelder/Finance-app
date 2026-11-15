@@ -81,8 +81,7 @@ Not measured by `bench.py` (its tasks are single-file); the order of #2 and #3 f
 ### Private (code that must not leave this PC)
 | Priority | Model | Where | Cost | Rating | Basis |
 |---|---|---|---|---|---|
-| #1 | `gemma4:12b` | Ollama (local) | free | 3 | R |
-| #2 | Claude Opus 5.5 (do it yourself) | Claude Code | Claude plan | 10 | T |
+| #1 | Claude Opus 5.5 (do it yourself) | Claude Code | Claude plan | 10 | T |
 
 ### Avoid (no role)
 | Model | Where | Why |

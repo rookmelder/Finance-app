@@ -10,7 +10,7 @@ Run `agent/check_setup.py` afterwards: it tests each key with a free call.
 | `OPENROUTER_API_KEY` | openrouter.ai > Keys | `:free` models: 50/day, or 1000/day once you ever bought $10 credit | Only `:free` models are free; routers and paid models use credit |
 | `OPENAI_API_KEY` | platform.openai.com > API keys | With data sharing ON: 250k tokens/day big models, 2.5M/day mini | Needs a prepaid credit. Anything else bills it; `delegate.py` blocks that |
 
-**Private projects:** the free tiers above may log or train on your prompts. For private work use agy, Ollama or Claude only (`private: yes` in `PROJECT.md`; it is also the default).
+**Private projects:** the free tiers above may log or train on your prompts. For private work use agy or Claude only (`private: yes` in `PROJECT.md`; it is also the default).
 
 Ratings and pick order per model: `agent/MODELS.md`. Limits per provider: `agent/LIMITS.md`.
 Another OpenAI-compatible provider: add it to `agent/models.json` and put its key in `.env`.

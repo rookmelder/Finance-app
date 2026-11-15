@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Send one task to a worker (agy, Copilot+cloud API, or local Ollama) by role, with safe defaults.
+"""Send one task to a worker (agy or Copilot+cloud API) by role, with safe defaults.
 
 Examples (from the project root; Windows, Linux and macOS):
   python agent/delegate.py --role builder --task-file .worker/t1.md --include src/shop.py
   python agent/delegate.py --role reviewer --task-file .worker/review.md
   python agent/delegate.py --role builder --provider nvidia --task-file .worker/t1.md   # force one worker
-  python agent/delegate.py --local --task-file .worker/t1.md                            # private, text only
 
 Roles: any agent/roles/<name>.md (frontmatter: base, models). Core rules per base: agent/bases/<base>.md.
 Each role has a worker chain; workers missing on this machine (SETUP.md) are skipped. On a transient
@@ -121,7 +120,7 @@ def parse_project(text):
         notes = m.group(1).strip()
     if notes.startswith('- <'):   # template placeholder, not filled in
         notes = ''
-    # Private = only agy (and --local). Anything but a clear "no" counts as private, so a typo never opens the cloud.
+    # Private = only agy. Anything but a clear "no" counts as private, so a typo never opens the cloud.
     val = proj.get('private', '').lower()
     if val in ('yes', 'no'):
         private = val == 'yes'
@@ -374,7 +373,7 @@ def direct_mode(base, a):
     """Can this task run as ONE plain API call, without a harness? (API workers only; agy always uses its CLI.)
     Reviewer: when the files it must judge are pasted in with --include.
     Scribe: when --files names exactly one .md file that is new or pasted in with --include."""
-    if a.no_direct or a.conversation or a.local:
+    if a.no_direct or a.conversation:
         return False
     if base == 'reviewer':
         return bool(a.include)
@@ -730,8 +729,6 @@ def parse_args(argv):
     ap.add_argument('--no-sandbox', action='store_true', help='only if the check must write outside this folder')
     ap.add_argument('--no-agent', action='store_true', help='agy: full default tool set (debugging only)')
     ap.add_argument('--json', action='store_true', help='print the full JSON instead of the summary')
-    ap.add_argument('--local', action='store_true', help='Ollama, text only')
-    ap.add_argument('--local-model', default='gemma4:12b')
     return ap.parse_args(argv)
 
 
@@ -764,7 +761,7 @@ def main(argv=None):
 
     available = parse_available(read_text(ROOT / 'SETUP.md')) if (ROOT / 'SETUP.md').exists() else None
     if private and (a.provider or a.openrouter):
-        raise Fail('This project is private (PROJECT.md): cloud API workers are not allowed. Use agy (--model), --local, '
+        raise Fail('This project is private (PROJECT.md): cloud API workers are not allowed. Use agy (--model) '
                    'or do it yourself. To allow free cloud workers, set "private: no" in the settings block of PROJECT.md.', 6)
     if a.openrouter:
         a.provider = 'openrouter'
@@ -786,26 +783,13 @@ def main(argv=None):
 
     # The check is run here, never by a worker. Reviewer: before, so it can read the result.
     check = None
-    check_cmd, why_not = (None, '') if a.no_check or a.local or base == 'scribe' else check_command(proj['check_one'], a.part)
+    check_cmd, why_not = (None, '') if a.no_check or base == 'scribe' else check_command(proj['check_one'], a.part)
     if why_not and proj['check_one'].strip():
         check = {'skipped': why_not}
     if check_cmd and base == 'reviewer' and not a.conversation:
         check = run_check(check_cmd, a.check_timeout_sec)
     task = build_prompt(task, base, a.role, role_body, rules, proj, notes, a.include, a.conversation, check)
 
-    if a.local:   # local Ollama, text only
-        if not shutil.which('ollama'):
-            raise Fail('ollama not found on PATH.', 3)
-        task += ('\n\nNOTE: you cannot edit files or run commands. Reply with the COMPLETE contents of every file you change, '
-                 'each in a fenced block whose first line is a comment with its path. Then the report.')
-        # stderr (spinner, a freshly started Ollama server's log) is dropped; terminal codes are stripped.
-        text, why = run_tool(['ollama', 'run', a.local_model, '--hidethinking', '--nowordwrap'],
-                             stdin_bytes=task.encode('utf-8'), timeout=a.timeout_sec, keep_stderr=False)
-        print(re.sub(r'\x1b\[[0-9;?]*[A-Za-z]', '', text).strip())
-        if why == 'timeout':
-            print(f'ERROR: no answer within {a.timeout_sec}s (TIMEOUT).', file=sys.stderr)
-            return 3
-        return 0
 
     ctx = Ctx()
     ctx.args, ctx.task, ctx.base, ctx.proj = a, task, base, proj

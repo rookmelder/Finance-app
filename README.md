@@ -117,12 +117,11 @@ Each pack says what a good goal should cover, how to check the work, how to spli
 | Gemini API | Free | ~500 requests a day (Flash-Lite) |
 | OpenRouter | Free models cost nothing | 50 a day, or 1000 a day once you ever bought $10 credit |
 | OpenAI | Small prepaid credit | Free daily tokens with data sharing on: 250k (big models), 2.5M (small) |
-| Ollama | Free, on your PC | Unlimited, but slow on small GPUs |
 
 - **OpenAI guard:** `delegate.py` refuses models that would bill your credit, and stops at 90% of the free daily
   tokens, also in the middle of a job. Its count is an estimate; OpenAI's usage page is the real number.
 - **Privacy:** the free tiers of NVIDIA, Gemini API, OpenRouter and OpenAI may read or train on what you send.
-  A project is private until `PROJECT.md` says `private: no`: until then `delegate.py` only uses agy (or Ollama).
+  A project is private until `PROJECT.md` says `private: no`: until then `delegate.py` only uses agy.
   Workers through Copilot can't read or write `.env`, so your keys don't reach a cloud model.
 
 ## Keeping tokens (and so cost and speed) down
@@ -171,7 +170,7 @@ python agent/delegate.py --role builder --task-file .worker/t1.md --part shop --
 ```
 
 - `--role` picks the role (any file in `agent/roles/`). `--include` pastes files into the task.
-- `--model` (an agy model) or `--provider` + `--provider-model` force one specific worker. `--local` uses Ollama.
+- `--model` (an agy model) or `--provider` + `--provider-model` force one specific worker.
 - Result codes: 0 OK, 2 unknown role or no task, 3 took too long, 4 tried something forbidden, 5 empty answer,
   6 provider problem or no worker available.
 

@@ -9,7 +9,7 @@ Works for any project: software, games, research, automation, writing.
 
 ## Roles and workers
 A worker = a **model** + a **harness** that lets it read and write files here: **agy** (Google Antigravity CLI) or
-**Copilot CLI** (all API models: NVIDIA, Gemini API, OpenRouter, OpenAI). **Ollama** (`--local`) is text only: you write its files.
+**Copilot CLI** (all API models: NVIDIA, Gemini API, OpenRouter, OpenAI).
 No worker runs commands: `delegate.py` runs the project's check itself.
 
 - A role is `agent/roles/<name>.md`: `base` (builder | tester | reviewer | scribe), `models` (the chain, first = main;
@@ -19,7 +19,7 @@ No worker runs commands: `delegate.py` runs the project's check itself.
 - Tester and reviewer must use a different model than the builder (its model is in the summary line). Force one with
   `--model <agy model>` or `--provider <name> [--provider-model <id>]`.
 - **Private project** (`private:` in `PROJECT.md`; anything but `no` counts as private): only agy workers run, cloud
-  APIs are refused. Otherwise use `--local` or do it yourself.
+  APIs are refused. Otherwise do it yourself.
 - OpenAI models only in reviewer or scribe roles. Never agy `claude-opus-4-6-thinking`; agy `claude-sonnet-4-6` only for reviewers.
 - Models for new roles: `agent/MODELS.md`. Models, providers and limits the script knows: `agent/models.json`.
 
