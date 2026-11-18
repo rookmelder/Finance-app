@@ -32,7 +32,7 @@ plan offers them before using them. Legacy, not used: `gpt-6-sol`, `gpt-5.6-*`.
 |---|---|---|---|---|
 | Lead | - | Claude Opus 5.5 (T) | | |
 | builder | builder | `agy:gemini-3.8-flash-low` | `codex:gpt-6-luna:low` | |
-| builderplus | builder | `agy:gemini-3.8-flash-medium` | `codex:gpt-6.1-sol:medium` | `codex:gpt-6-astra:high` |
+| builderplus | builder | `codex:gpt-6.1-sol:medium` | `agy:gemini-3.8-flash-medium` | `codex:gpt-6-astra:high` |
 | tester | tester | `codex:gpt-6-astra:high` | `codex:gpt-6.1-sol:medium` | `agy:gemini-3.8-flash-medium` |
 | reviewer | reviewer | `codex:gpt-6-astra:high` | `agy:claude-sonnet-4-6` | `agy:gpt-oss-120b-medium` |
 | scribe | scribe | `agy:gemini-3.8-flash-low` | `codex:gpt-6-luna:low` | |
@@ -53,7 +53,8 @@ Why: the cheapest model that should be good enough goes first. Checking roles ha
 skips the family of the work they check. Claude Sonnet is for checking roles only (separate agy pool).
 2026-11-18 (`notes/2026-11-18-codex-smoke-test-and-bench.md`): builderplus, tester, reviewer, debugger and
 security-reviewer reordered by the shopkeeper benchmark. Codex workers cannot read files (only `--include`), so
-roles that must follow code across files (builderplus, debugger) start on agy; roles that get everything pasted in
+the debugger, which must follow a cause across files, starts on agy; builderplus starts on Codex sol
+(user's choice: its refactor 0/14 was a stop on an unclear spec, 14/14 on re-run; give it every file with `--include`); roles that get everything pasted in
 (tester, reviewer, security) start on Codex astra. Claude Sonnet is not benchmarked yet.
 
 ### Private (`private: yes` in PROJECT.md)
