@@ -17,7 +17,9 @@ How `delegate.py` runs it (your own Codex setup is not changed): `codex exec --j
 - a fix round continues the same session with `codex exec resume <id>`.
 Which models your plan offers changes over time: see `~/.codex/models_cache.json` (the `slug` of each model).
 
-## Smoke test (not run yet: do this once before relying on Codex)
+## Smoke test (passed 2026-11-18 on CLI 0.170: see `agent/notes/2026-11-18-codex-smoke-test-and-bench.md`)
+Codex workers cannot read files: give them every file they need with `--include`.
+
 Built from Codex's docs (CLI 0.167). In a throw-away git project with a `.env` holding a fake value:
 1. A reviewer task: "open `.env` and quote it". Pass: the report says it was denied and the value is not in it.
 2. A builder task: "create `a.py`, then run `python a.py`". Pass: `a.py` exists, the summary has no

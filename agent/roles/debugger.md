@@ -1,6 +1,6 @@
 ---
 base: reviewer
-models: codex:gpt-6-astra:high, agy:claude-sonnet-4-6
+models: agy:gemini-3.8-flash-medium, agy:claude-sonnet-4-6, codex:gpt-6-astra:high
 does: Finds the root cause of a failing check after a fix round made no progress; never fixes it.
 ---
 You diagnose, you do not repair. The failing check output, the spec and the files are below.

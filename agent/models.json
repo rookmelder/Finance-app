@@ -26,8 +26,8 @@
   "default_models": {
     "_about": "Used when a role file has no models: line.",
     "builder": "agy:gemini-3.8-flash-low, codex:gpt-6-luna:low",
-    "tester": "codex:gpt-6-luna:medium, agy:gemini-3.8-flash-low",
-    "reviewer": "agy:claude-sonnet-4-6, codex:gpt-6.1-sol:medium, agy:gpt-oss-120b-medium",
+    "tester": "codex:gpt-6-astra:high, codex:gpt-6.1-sol:medium, agy:gemini-3.8-flash-medium",
+    "reviewer": "codex:gpt-6-astra:high, agy:claude-sonnet-4-6, agy:gpt-oss-120b-medium",
     "scribe": "agy:gemini-3.8-flash-low, codex:gpt-6-luna:low"
   }
 }

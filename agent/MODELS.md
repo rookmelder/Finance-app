@@ -32,13 +32,13 @@ plan offers them before using them. Legacy, not used: `gpt-6-sol`, `gpt-5.6-*`.
 |---|---|---|---|---|
 | Lead | - | Claude Opus 5.5 (T) | | |
 | builder | builder | `agy:gemini-3.8-flash-low` | `codex:gpt-6-luna:low` | |
-| builderplus | builder | `codex:gpt-6.1-sol:medium` | `codex:gpt-6-astra:high` | `agy:gemini-3.8-flash-medium` |
-| tester | tester | `codex:gpt-6-luna:medium` | `agy:gemini-3.8-flash-low` | |
-| reviewer | reviewer | `agy:claude-sonnet-4-6` | `codex:gpt-6.1-sol:medium` | `agy:gpt-oss-120b-medium` |
+| builderplus | builder | `agy:gemini-3.8-flash-medium` | `codex:gpt-6.1-sol:medium` | `codex:gpt-6-astra:high` |
+| tester | tester | `codex:gpt-6-astra:high` | `codex:gpt-6.1-sol:medium` | `agy:gemini-3.8-flash-medium` |
+| reviewer | reviewer | `codex:gpt-6-astra:high` | `agy:claude-sonnet-4-6` | `agy:gpt-oss-120b-medium` |
 | scribe | scribe | `agy:gemini-3.8-flash-low` | `codex:gpt-6-luna:low` | |
-| debugger | reviewer | `codex:gpt-6-astra:high` | `agy:claude-sonnet-4-6` | |
+| debugger | reviewer | `agy:gemini-3.8-flash-medium` | `agy:claude-sonnet-4-6` | `codex:gpt-6-astra:high` |
 | mapper | scribe | `agy:gemini-3.8-flash-medium` | `codex:gpt-6.1-sol:low` | |
-| security-reviewer (software) | reviewer | `agy:claude-sonnet-4-6` | `codex:gpt-6-astra:high` | |
+| security-reviewer (software) | reviewer | `codex:gpt-6-astra:high` | `agy:claude-sonnet-4-6` | |
 | visual-reviewer (software) | reviewer | `codex:gpt-6.1-terra:medium` | `agy:claude-sonnet-4-6` | |
 | designer (game) | scribe | `codex:gpt-6.1-sol:medium` | `agy:gemini-3.8-flash-medium` | |
 | content (game) | builder | `agy:gemini-3.8-flash-low` | `codex:gpt-6-luna:low` | |
@@ -51,6 +51,10 @@ plan offers them before using them. Legacy, not used: `gpt-6-sol`, `gpt-5.6-*`.
 
 Why: the cheapest model that should be good enough goes first. Checking roles have two families, because the script
 skips the family of the work they check. Claude Sonnet is for checking roles only (separate agy pool).
+2026-11-18 (`notes/2026-11-18-codex-smoke-test-and-bench.md`): builderplus, tester, reviewer, debugger and
+security-reviewer reordered by the shopkeeper benchmark. Codex workers cannot read files (only `--include`), so
+roles that must follow code across files (builderplus, debugger) start on agy; roles that get everything pasted in
+(tester, reviewer, security) start on Codex astra. Claude Sonnet is not benchmarked yet.
 
 ### Private (`private: yes` in PROJECT.md)
 agy and Codex both allowed (`private_ok` in `models.json`), with "Improve the model for everyone" OFF in ChatGPT.
