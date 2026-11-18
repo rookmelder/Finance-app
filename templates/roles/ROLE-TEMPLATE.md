@@ -1,6 +1,6 @@
 ---
 base: builder
-models: agy:gemini-3.8-flash-low, gemini:gemini-flash-lite-latest
+models: agy:gemini-3.8-flash-low, codex:gpt-6-luna:low
 does: One line: what this role makes or checks.
 ---
 <!-- Copy this file to agent/roles/<name>.md and run it with: agent/delegate.py --role <name>
@@ -12,9 +12,11 @@ FRONTMATTER
     reviewer = reads and reports; never edits anything
     scribe   = writes markdown docs only
 - models: the worker chain, first = main, the rest are fallbacks. Leave the line out to use the base's default.
-    agy:<model>        gemini-3.8-flash-low, gemini-3.8-flash-medium, claude-sonnet-4-6 (reviewers only), gpt-oss-120b-medium
-    <provider>:<id>    nvidia, gemini, openrouter, openai (openai: reviewer roles only)
-  Pick models from agent/MODELS.md (the script's list: agent/models.json). A tester/reviewer should not share a model with the builder it checks.
+    agy:<model>                 gemini-3.8-flash-low, gemini-3.8-flash-medium, claude-sonnet-4-6 (reviewers only), gpt-oss-120b-medium
+    codex:<model>[:<effort>]    gpt-6-luna (fast), gpt-6.1-sol (coding), gpt-6-astra (complex), gpt-6.1-terra (images);
+                                effort low | medium | high | xhigh
+  Pick models from agent/MODELS.md (the script's list: agent/models.json). A tester/reviewer role needs models from
+  at least two families (gemini, claude, gpt): delegate.py skips the family of the builder it checks.
 - does: one line, shown to the Lead when choosing roles.
 
 BODY (below the frontmatter): only what is special about this role. The base rules and the report format

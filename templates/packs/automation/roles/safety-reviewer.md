@@ -1,5 +1,6 @@
 ---
 base: reviewer
+models: agy:claude-sonnet-4-6, codex:gpt-6-astra:high
 does: Checks scripts for destructive or risky actions before they run for real.
 ---
 For each item: quote, YES/NO, 1 sentence.

@@ -13,10 +13,6 @@ import delegate as d  # noqa: E402
 
 
 class ParseFiles(unittest.TestCase):
-    def test_env_file(self):
-        env = d.parse_env_file('# comment\nA_KEY = "abc"\nEMPTY=\nlower=x\nB=1 2 \n')
-        self.assertEqual(env, {'A_KEY': 'abc', 'B': '1 2'})
-
     def test_project_settings_notes_private(self):
         text = ('**Private?** yes\n## Settings\n```settings\ncheck_one: `python -m unittest tests.test_{name}`\n'
                 'check_all: python -m unittest\ncheck_dir:\n```\n## Worker notes (x)\n- Python 3.12\n- no deps\n\n## Other\nz')
@@ -43,46 +39,92 @@ class ParseFiles(unittest.TestCase):
         self.assertTrue(d.parse_project('**Private?** no\n' + block('yes'))[2])                  # settings win
 
     def test_models_json(self):
-        for table in (d.PROVIDERS, d.DEFAULT_MODELS, d.OPENAI_FREE, d.OPENAI_RUN_CAP):
+        for table in (d.DEFAULT_MODELS, d.FAMILIES):
             self.assertFalse([k for k in table if k.startswith('_')])
         self.assertEqual(set(d.DEFAULT_MODELS), set(d.BASES))
-        for pv in d.PROVIDERS.values():
-            self.assertEqual(set(pv), {'url', 'key', 'model'})
-        self.assertGreater(d.MAX_CALLS, 0)
+        self.assertTrue(set(d.PRIVATE_OK) <= set(d.HARNESSES))
+        for chain in d.DEFAULT_MODELS.values():
+            for w in d.parse_chain(chain):
+                self.assertTrue(w['h'] != 'agy' or w['m'] in d.AGY_MODELS, w)
 
     def test_role(self):
-        fm, body = d.parse_role('---\r\nbase: tester\r\nmodels: gemini, nvidia:x/y\r\n---\r\nExtra rule.\r\n')
-        self.assertEqual(fm, {'base': 'tester', 'models': 'gemini, nvidia:x/y'})
+        fm, body = d.parse_role('---\r\nbase: tester\r\nmodels: codex:m1, agy:m2\r\n---\r\nExtra rule.\r\n')
+        self.assertEqual(fm, {'base': 'tester', 'models': 'codex:m1, agy:m2'})
         self.assertEqual(body, 'Extra rule.')
         self.assertEqual(d.parse_role('no frontmatter'), ({}, 'no frontmatter'))
 
     def test_every_role_file_parses(self):
-        for f in (d.AGENT_DIR / 'roles').glob('*.md'):
+        files = list((d.AGENT_DIR / 'roles').glob('*.md')) + list((d.ROOT / 'templates').rglob('roles/*.md'))
+        self.assertGreater(len(files), 15)
+        for f in files:
             fm, _ = d.parse_role(d.read_text(f))
             self.assertIn(fm.get('base', 'builder'), d.BASES, f.name)
-            self.assertTrue(d.parse_chain(fm.get('models') or d.DEFAULT_MODELS[fm.get('base', 'builder')]), f.name)
+            chain = d.parse_chain(fm.get('models') or d.DEFAULT_MODELS[fm.get('base', 'builder')])
+            self.assertTrue(chain, f.name)
+            self.assertTrue(all(w['h'] != 'agy' or w['m'] in d.AGY_MODELS for w in chain), f.name)
+            if fm.get('base') in ('tester', 'reviewer'):   # it must be able to skip the builder's family
+                self.assertGreater(len({d.family(w['m']) for w in chain}), 1, f.name)
 
     def test_chain(self):
-        c = d.parse_chain('agy:gemini-3.8-flash-low, nvidia, openrouter:nvidia/nemotron:free,')
-        self.assertEqual(c, [{'h': 'agy', 'm': 'gemini-3.8-flash-low'}, {'h': 'cp', 'p': 'nvidia', 'pm': ''},
-                             {'h': 'cp', 'p': 'openrouter', 'pm': 'nvidia/nemotron:free'}])
+        c = d.parse_chain('agy:gemini-3.8-flash-low, codex:gpt-5.6-terra, codex:gpt-5.6-luna:low,')
+        self.assertEqual(c, [{'h': 'agy', 'm': 'gemini-3.8-flash-low', 'e': ''}, {'h': 'codex', 'm': 'gpt-5.6-terra', 'e': ''},
+                             {'h': 'codex', 'm': 'gpt-5.6-luna', 'e': 'low'}])
+        self.assertEqual(d.worker_name(c[2]), 'codex gpt-5.6-luna (low)')
+        for bad in ('nvidia', 'openrouter:a/b:free', 'codex:', 'codex:m:turbo', 'agy:m:low'):
+            with self.assertRaises(d.Fail, msg=bad) as e:
+                d.to_worker(bad)
+            self.assertEqual(e.exception.code, 2)
+
+    def test_family(self):
+        self.assertEqual(d.family('gemini-3.8-flash-low'), 'gemini')
+        self.assertEqual(d.family('claude-sonnet-4-6'), 'claude')
+        self.assertEqual(d.family('gpt-5.6-luna'), d.family('gpt-oss-120b-medium'))
+        self.assertEqual(d.family('mystery-1'), 'mystery-1')
 
     def test_available(self):
-        av = d.parse_available('x\n```available\nagy: yes\nnvidia: no\n```\n')
-        self.assertEqual(av, {'agy': True, 'nvidia': False})
+        av = d.parse_available('x\n```available\nagy: yes\ncodex: no\n```\n')
+        self.assertEqual(av, {'agy': True, 'codex': False})
         self.assertIsNone(d.parse_available('nothing'))
         self.assertTrue(d.is_available({'h': 'agy', 'm': 'x'}, av))
-        self.assertFalse(d.is_available({'h': 'cp', 'p': 'nvidia', 'pm': ''}, av))
-        old = os.environ.pop('GEMINI_API_KEY', None)
-        try:   # a provider SETUP.md doesn't list (added in models.json): available when its key is set
-            self.assertFalse(d.is_available({'h': 'cp', 'p': 'gemini', 'pm': ''}, av))
-            os.environ['GEMINI_API_KEY'] = 'k'
-            self.assertTrue(d.is_available({'h': 'cp', 'p': 'gemini', 'pm': ''}, av))
-        finally:
-            os.environ.pop('GEMINI_API_KEY', None)
-            if old:
-                os.environ['GEMINI_API_KEY'] = old
-        self.assertTrue(d.is_available({'h': 'cp', 'p': 'gemini', 'pm': ''}, None))
+        self.assertFalse(d.is_available({'h': 'codex', 'm': 'x'}, av))
+        self.assertFalse(d.is_available({'h': 'codex', 'm': 'x'}, {'agy': True}))
+        self.assertTrue(d.is_available({'h': 'codex', 'm': 'x'}, None))
+
+
+class Paths(unittest.TestCase):
+    def test_secret_names(self):
+        for s in ('.env', 'sub/.env.local', '.env.production', 'server.pem', 'a/b/tls.key', 'id_rsa', 'id_ed25519.pub',
+                  '.git-credentials', 'credentials.json', 'C:\\x\\.npmrc'):
+            self.assertTrue(d.is_secret(s), s)
+        for s in ('.env.example', '.env.sample', 'env.py', 'keys.py', 'src/key_store.py', 'README.md', 'monkey.txt'):
+            self.assertFalse(d.is_secret(s), s)
+
+    def test_project_path(self):
+        old = d.ROOT
+        with tempfile.TemporaryDirectory() as t:
+            d.ROOT = Path(t)
+            try:
+                self.assertEqual(d.project_path('src\\shop.py', '--files'), 'src/shop.py')
+                self.assertEqual(d.project_path('./tests/test_*.py', '--files'), 'tests/test_*.py')
+                self.assertEqual(d.project_path(str(Path(t, 'a', 'b.py')), '--include'), 'a/b.py')
+                for bad in ('../other/x.py', 'src/../../x.py', str(Path(t).parent / 'x.py'), '.git/config', '.env', 'conf/.env.local'):
+                    with self.assertRaises(d.Fail, msg=bad) as e:
+                        d.project_path(bad, '--include')
+                    self.assertEqual(e.exception.code, 4)
+            finally:
+                d.ROOT = old
+
+    def test_secret_files_found_and_skipped_dirs(self):
+        with tempfile.TemporaryDirectory() as t:
+            for f in ('.env', 'app/.env.local', 'app/main.py', '.env.example', 'node_modules/x/.env', '.git/creds.pem'):
+                Path(t, f).parent.mkdir(parents=True, exist_ok=True)
+                Path(t, f).write_text('x', encoding='utf-8')
+            found = [os.path.relpath(p, t).replace('\\', '/') for p in d.secret_files(t)]
+            self.assertEqual(found, ['.env', 'app/.env.local'])
+
+    def test_agy_settings_deny_each_secret(self):
+        s = d.agy_settings(['C:/p/.env'])
+        self.assertEqual(s, {'permissions': {'deny': ['read_file(C:/p/.env)', 'write_file(C:/p/.env)']}})
 
 
 class Prompt(unittest.TestCase):
@@ -107,12 +149,6 @@ class Prompt(unittest.TestCase):
         self.assertIn('Run no commands.', d.build_prompt('T', 'scribe', 's', '', 'R', proj, '', [], None))
         self.assertIn('no check command', d.build_prompt('T', 'builder', 'b', '', 'R', proj, '', [], None))
         self.assertEqual(d.build_prompt('T', 'builder', 'b', '', 'R', proj, '', [], 'conv1'), 'T')
-
-    def test_copilot_tools_have_no_shell(self):
-        self.assertEqual(d.copilot_tools('scribe', '')['allow'], ['write(**/*.md)'])
-        self.assertEqual(d.copilot_tools('tester', 'tests'), {'tools': 'view,create,edit,grep,glob', 'allow': ['write(tests/**)']})
-        self.assertEqual(d.copilot_tools('builder', ''), {'tools': 'view,create,edit,grep,glob', 'allow': ['write']})
-        self.assertEqual(d.copilot_tools('reviewer', 'tests'), {'tools': 'view,grep,glob', 'allow': []})
 
     def test_reviewer_gets_check_result(self):
         proj = {'check_one': 'x {name}', 'check_all': '', 'check_dir': ''}
@@ -169,23 +205,29 @@ class Check(unittest.TestCase):
         self.assertIn('boom', d.fix_prompt('builder', check))
         self.assertIn('change nothing', d.fix_prompt('tester', check))
 
-    def run_main(self, fake, extra=(), check=None):
+    def run_main(self, fake, extra=(), check=None, files=None, model=True):
         """main() in a temp project whose check passes once ok.txt exists; the worker is faked."""
         import contextlib
         import io
-        old = (d.ROOT, d.invoke_agy, os.getcwd())
+        old = (d.ROOT, dict(d.INVOKE), os.getcwd())
         with tempfile.TemporaryDirectory() as t:
             check = check or 'python -c "import os,sys; sys.exit(0 if os.path.exists(\'{name}.txt\') else 1)"'
             Path(t, 'PROJECT.md').write_text(f'```settings\ncheck_one: {check}\n```\n', encoding='utf-8')
-            d.ROOT, d.invoke_agy = Path(t), fake
+            d.ROOT = Path(t)
+            d.INVOKE.update(agy=fake, codex=fake)
+            for name, text in (files or {}).items():
+                Path(t, name).parent.mkdir(parents=True, exist_ok=True)
+                Path(t, name).write_text(text, encoding='utf-8')
             out = io.StringIO()
             try:
                 with contextlib.redirect_stdout(out):
-                    code = d.main(['--model', 'gemini-3.8-flash-low', '--task', 'x', *extra])
+                    code = d.main((['--model', 'gemini-3.8-flash-low'] if model else []) + ['--task', 'x', *extra])
                 last = json.loads(Path(t, '.worker', 'last.json').read_text(encoding='utf-8'))
             finally:
                 os.chdir(old[2])
-                d.ROOT, d.invoke_agy = old[0], old[1]
+                d.ROOT = old[0]
+                d.INVOKE.clear()
+                d.INVOKE.update(old[1])
         return code, last, out.getvalue()
 
     def test_failed_check_goes_back_to_the_worker_once(self):
@@ -224,9 +266,7 @@ class Check(unittest.TestCase):
         code, last, out = self.run_main(fake, ['--part', 'ok', '--fix-rounds', '2'])   # same failure twice: stop after 1
         self.assertEqual((code, len(calls), last['check']['fix_rounds']), (7, 5, 1))
         self.assertIn('no fix round 2: the check failed the same way', out)
-        code, last, out = self.run_main(lambda w, ctx: dict(fake(w, ctx), calls=5), ['--part', 'ok', '--max-calls', '5'])
-        self.assertEqual((code, len(calls)), (7, 6))   # call cap used up: no fix round
-        self.assertIn('no fix round', out)
+        self.assertEqual((last['model'], last['family']), ('gemini-3.8-flash-low', 'gemini'))
         code, last, out = self.run_main(fake)   # no --part: {name} can't be filled, so no check
         self.assertEqual(code, 0)
         self.assertIn('check: not run', out)
@@ -271,82 +311,156 @@ class Changes(unittest.TestCase):
         own, outside = d.split_scope(lines, ['./src/shop.py', 'tests\\test_*.py'])
         self.assertEqual(own, ['?? src/shop.py', ' M tests/test_shop.py'])
         self.assertEqual(outside, ['?? src/cart.py', ' M .env'])
-        self.assertEqual(d.split_scope(lines, []), (lines, []))
+        self.assertEqual(d.split_scope(lines[:3], []), (lines[:3], []))
         self.assertTrue(d.in_scope(' M .env', ['.env']))
+        self.assertEqual(d.split_scope([' M .env', ' M a.py'], []), ([' M a.py'], [' M .env']))   # a secret is never "own"
 
 
-class Direct(unittest.TestCase):
-    def args(self, **kw):
+class Codex(unittest.TestCase):
+    def ctx(self, base='builder', conversation=None, secrets=()):
         import argparse
-        base = dict(no_direct=False, conversation=None, local=False, include=[], files=[], timeout_sec=30)
-        return argparse.Namespace(**{**base, **kw})
+        ctx = d.Ctx()
+        ctx.args = argparse.Namespace(conversation=conversation, schema=None, timeout_sec=30)
+        ctx.base, ctx.secrets = base, list(secrets)
+        return ctx
 
-    def test_when_one_plain_call_is_enough(self):
-        self.assertTrue(d.direct_mode('reviewer', self.args(include=['a.py'])))
-        self.assertFalse(d.direct_mode('reviewer', self.args()))                       # nothing pasted: it must read files
-        self.assertFalse(d.direct_mode('reviewer', self.args(include=['a.py'], no_direct=True)))
-        self.assertFalse(d.direct_mode('reviewer', self.args(include=['a.py'], conversation='c')))
-        self.assertFalse(d.direct_mode('builder', self.args(include=['a.py'], files=['a.md'])))
-        self.assertTrue(d.direct_mode('scribe', self.args(files=['docs/brand-new-file.md'])))
-        self.assertFalse(d.direct_mode('scribe', self.args(files=['README.md'])))      # exists, not pasted: would be overwritten blind
-        self.assertTrue(d.direct_mode('scribe', self.args(files=['README.md'], include=['README.md'])))
-        self.assertFalse(d.direct_mode('scribe', self.args(files=['a.md', 'b.md'])))
-        self.assertFalse(d.direct_mode('scribe', self.args(files=['docs/*.md'])))
-        self.assertIn('BEGIN FILE', d.direct_note('scribe', self.args(files=['x.md'])))
+    def opt(self, cmd, key):
+        """The value after each -c that sets key."""
+        return [cmd[i + 1].split('=', 1)[1] for i, x in enumerate(cmd[:-1]) if x == '-c' and cmd[i + 1].startswith(key + '=')]
 
-    def test_extract_file(self):
-        self.assertEqual(d.extract_file('intro\nBEGIN FILE\n# Title\n\ntext\nEND FILE\nChanged: x.md'),
-                         ('# Title\n\ntext\n', 'intro\n\nChanged: x.md'))
-        self.assertEqual(d.extract_file('no block'), (None, 'no block'))
-        self.assertEqual(d.extract_file('=== BEGIN FILE ===\na\n<<<END FILE>>>\n')[0], 'a\n')   # decorated markers
+    def test_command_has_no_shell_and_no_user_config(self):
+        cmd = d.codex_cmd({'h': 'codex', 'm': 'gpt-5.6-luna', 'e': 'low'}, self.ctx())
+        self.assertEqual(cmd[:3], ['codex', 'exec', '--json'])
+        self.assertEqual(cmd[-1], '-')   # prompt on stdin
+        for flag in ('--ignore-user-config', '--ignore-rules'):
+            self.assertIn(flag, cmd)
+        disabled = [cmd[i + 1] for i, x in enumerate(cmd[:-1]) if x == '--disable']
+        for feature in ('shell_tool', 'multi_agent', 'apps', 'plugins', 'hooks'):
+            self.assertIn(feature, disabled)
+        self.assertEqual(cmd[cmd.index('-m') + 1], 'gpt-5.6-luna')
+        self.assertEqual(self.opt(cmd, 'model_reasoning_effort'), ['"low"'])
+        self.assertEqual(self.opt(cmd, 'approval_policy'), ['"never"'])
+        self.assertEqual(self.opt(cmd, 'web_search'), ['"disabled"'])
+        self.assertNotIn('--sandbox', cmd)   # a permission profile instead (Codex: never both)
+        self.assertNotIn('model_reasoning_effort', ' '.join(d.codex_cmd({'h': 'codex', 'm': 'm', 'e': ''}, self.ctx())))
 
-    def call(self, base, reply=None, error=None, files=()):
-        import io
-        import urllib.error
-        seen = {}
+    def test_profile_is_valid_toml_and_denies_secrets(self):
+        import tomllib
+        secret = 'C:\\proj\\.env' if d.IS_WIN else '/proj/.env'
+        for base, extends, root in (('builder', ':workspace', 'write'), ('reviewer', ':read-only', 'read')):
+            cmd = d.codex_cmd({'h': 'codex', 'm': 'm', 'e': ''}, self.ctx(base, secrets=[secret]))
+            self.assertEqual(self.opt(cmd, 'default_permissions'), ['"worker"'])
+            prof = tomllib.loads('p = ' + self.opt(cmd, 'permissions.worker')[0])['p']
+            self.assertEqual(prof['extends'], extends)
+            self.assertEqual(prof['filesystem'][':workspace_roots']['.'], root)
+            self.assertEqual(prof['filesystem'][':workspace_roots']['**/.env'], 'deny')
+            self.assertEqual(prof['filesystem'][secret], 'deny')
 
-        def fake_urlopen(req, timeout=None):
-            seen['url'], seen['body'], seen['auth'] = req.full_url, json.loads(req.data), req.get_header('Authorization')
-            if error:
-                raise urllib.error.HTTPError(req.full_url, error, 'x', None, io.BytesIO(b'{"error":"rate limit"}'))
-            return io.BytesIO(json.dumps({'choices': [{'message': {'content': reply}}],
-                                          'usage': {'prompt_tokens': 900, 'completion_tokens': 40}}).encode())
+    def test_resume(self):
+        cmd = d.codex_cmd({'h': 'codex', 'm': 'm', 'e': ''}, self.ctx(conversation='th-1'))
+        self.assertEqual(cmd[:3], ['codex', 'exec', 'resume'])
+        self.assertEqual(cmd[-2:], ['th-1', '-'])
 
-        old = (d.urllib.request.urlopen, d.ROOT, os.environ.get('GEMINI_API_KEY'))
-        with tempfile.TemporaryDirectory() as t:
-            d.urllib.request.urlopen, d.ROOT = fake_urlopen, Path(t)
-            os.environ['GEMINI_API_KEY'] = 'secret-key'
-            ctx = d.Ctx()
-            ctx.args, ctx.task, ctx.base = self.args(files=list(files)), 'THE TASK', base
+    def events(self, *ev, noise='progress on stderr'):
+        return d.parse_codex_events(noise + '\n' + '\n'.join(json.dumps(e) for e in ev), 'gpt-5.6-luna', 'low')
+
+    def test_events(self):
+        ok = self.events({'type': 'thread.started', 'thread_id': 'th-9'}, {'type': 'turn.started'},
+                         {'type': 'item.completed', 'item': {'id': 'i1', 'type': 'file_change', 'changes': []}},
+                         {'type': 'item.completed', 'item': {'id': 'i2', 'type': 'agent_message', 'text': 'first'}},
+                         {'type': 'item.completed', 'item': {'id': 'i3', 'type': 'agent_message', 'text': 'Report'}},
+                         {'type': 'turn.completed', 'usage': {'input_tokens': 900, 'cached_input_tokens': 500,
+                                                              'output_tokens': 40, 'reasoning_output_tokens': 7}})
+        self.assertEqual((ok['code'], ok['conversation_id'], ok['response'], ok['worker']), (0, 'th-9', 'Report', 'codex gpt-5.6-luna (low)'))
+        self.assertEqual((ok['input_tokens'], ok['cache_read_tokens'], ok['output_tokens'], ok['thinking_tokens']), (900, 500, 40, 7))
+
+    def test_event_errors(self):
+        ran = self.events({'type': 'thread.started', 'thread_id': 't'},
+                          {'type': 'item.started', 'item': {'id': 'c1', 'type': 'command_execution', 'command': 'cat .env'}},
+                          {'type': 'item.completed', 'item': {'id': 'c1', 'type': 'command_execution', 'command': 'cat .env'}},
+                          {'type': 'item.completed', 'item': {'id': 'm', 'type': 'agent_message', 'text': 'r'}},
+                          {'type': 'turn.completed', 'usage': {}})
+        self.assertEqual((ran['code'], len(ran['denied'])), (4, 1))
+        self.assertIn('cat .env', ran['denied'][0])
+        failed = self.events({'type': 'thread.started', 'thread_id': 't'}, {'type': 'turn.failed', 'error': {'message': '429 rate limit'}})
+        self.assertEqual(failed['code'], 6)
+        self.assertTrue(d.TRANSIENT.search(failed['error']))
+        self.assertEqual(self.events({'type': 'error', 'message': 'usage limit reached'})['code'], 6)
+        empty = self.events({'type': 'thread.started', 'thread_id': 't'}, {'type': 'turn.completed', 'usage': {}})
+        self.assertEqual(empty['code'], 5)
+        crash = d.parse_codex_events('a\nb\nError: not logged in\n', 'm')
+        self.assertEqual((crash['code'], crash['error']), (6, 'a b Error: not logged in'))
+
+
+class Independence(unittest.TestCase):
+    """A tester/reviewer never runs on the builder's model family (and needs --after); secrets never go in."""
+    run_main = Check.run_main
+
+    def fake(self, seen):
+        def f(w, ctx):
+            seen.append(w['m'])
+            return {'worker': d.worker_name(w), 'code': 0, 'conversation_id': 'c', 'response': 'r', 'calls': '?', 'denied': []}
+        return f
+
+    def run_role(self, role, models, after, extra=()):
+        seen = []
+        builder_run = {'.worker/run-0123abcd.json': json.dumps({'model': 'gemini-3.8-flash-low', 'family': 'gemini'})}
+        old = d.AGENT_DIR
+        with tempfile.TemporaryDirectory() as agent:
+            for sub in ('roles', 'bases'):
+                Path(agent, sub).mkdir()
+            Path(agent, 'roles', f'{role}.md').write_text(f'---\nbase: {role}\nmodels: {models}\n---\n', encoding='utf-8')
+            Path(agent, 'bases', f'{role}.md').write_text('RULES', encoding='utf-8')
+            d.AGENT_DIR = Path(agent)
             try:
-                o = d.invoke_direct({'h': 'cp', 'p': 'gemini', 'pm': 'm1'}, ctx)
-                written = {f: Path(t, f).read_text(encoding='utf-8') for f in files if Path(t, f).exists()}
+                args = ['--role', role] + (['--after', after] if after else []) + list(extra)
+                code, last, _ = self.run_main(self.fake(seen), args, files=builder_run, model=False)
             finally:
-                d.urllib.request.urlopen, d.ROOT = old[0], old[1]
-                os.environ.pop('GEMINI_API_KEY', None)
-                if old[2]:
-                    os.environ['GEMINI_API_KEY'] = old[2]
-        return o, seen, written
+                d.AGENT_DIR = old
+        return code, seen, last
 
-    def test_reviewer_is_one_call(self):
-        o, seen, _ = self.call('reviewer', reply='Problems: none')
-        self.assertEqual((o['code'], o['calls'], o['response'], o['input_tokens'], o['output_tokens']), (0, 1, 'Problems: none', 900, 40))
-        self.assertEqual(seen['url'], 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions')
-        self.assertEqual(seen['body'], {'model': 'm1', 'messages': [{'role': 'user', 'content': 'THE TASK'}]})
-        self.assertEqual(seen['auth'], 'Bearer secret-key')
-        self.assertEqual(self.call('reviewer', reply='')[0]['code'], 5)
+    def test_reviewer_skips_the_builders_family(self):
+        code, seen, last = self.run_role('reviewer', 'agy:gemini-3.8-flash-low, codex:gpt-5.6-terra', '0123abcd')
+        self.assertEqual((code, seen, last['family'], last['after']), (0, ['gpt-5.6-terra'], 'gpt', '0123abcd'))
+        code, seen, _ = self.run_role('tester', 'agy:gemini-3.8-flash-low, codex:gpt-5.6-luna:low', '.worker/run-0123abcd.json')
+        self.assertEqual(seen, ['gpt-5.6-luna'])
+        code, seen, _ = self.run_role('reviewer', 'agy:gemini-3.8-flash-low, codex:gpt-5.6-terra', 'lead')
+        self.assertEqual(seen, ['gemini-3.8-flash-low'])   # the Lead made it: no family to avoid
 
-    def test_provider_error_is_transient(self):
-        o, _, _ = self.call('reviewer', error=429)
-        self.assertEqual(o['code'], 6)
-        self.assertTrue(d.TRANSIENT.search(o['error']))
+    def test_refusals(self):
+        with self.assertRaises(d.Fail) as e:
+            self.run_role('reviewer', 'agy:gemini-3.8-flash-low', None)
+        self.assertIn('--after', str(e.exception))
+        with self.assertRaises(d.Fail) as e:
+            self.run_role('reviewer', 'agy:gemini-3.8-flash-low, agy:gemini-3.8-flash-medium', '0123abcd')
+        self.assertIn('gemini family', str(e.exception))
+        with self.assertRaises(d.Fail) as e:
+            self.run_role('reviewer', 'codex:gpt-5.6-terra', '0123abcd', ['--model', 'gemini-3.8-flash-medium'])
+        self.assertIn('same model family', str(e.exception))
+        with self.assertRaises(d.Fail) as e:
+            self.run_role('reviewer', 'codex:gpt-5.6-terra', 'ffffffff')
+        self.assertEqual(e.exception.code, 2)
 
-    def test_scribe_file_is_written_by_the_script(self):
-        o, _, written = self.call('scribe', reply='BEGIN FILE\n# Guide\nEND FILE\nChanged: guide.md\nFacts unsure: nothing', files=['guide.md'])
-        self.assertEqual((o['code'], written), (0, {'guide.md': '# Guide\n'}))
-        self.assertEqual(o['response'], 'Changed: guide.md\nFacts unsure: nothing')
-        o, _, written = self.call('scribe', reply='I forgot the markers', files=['guide.md'])
-        self.assertEqual((o['code'], written), (5, {}))
+    def test_secret_or_outside_path_refused(self):
+        with self.assertRaises(d.Fail) as e:
+            self.run_main(lambda w, c: {}, ['--include', '.env'], files={'.env': 'K=1'})
+        self.assertEqual(e.exception.code, 4)
+        with self.assertRaises(d.Fail) as e:
+            self.run_main(lambda w, c: {}, ['--files', '../elsewhere.py'])
+        self.assertEqual(e.exception.code, 4)
+        for name, text in (('shot.png', '\x89PNG\r\n\x1a\n\0\0'), ('missing.py', None)):
+            with self.assertRaises(d.Fail, msg=name) as e:
+                self.run_main(lambda w, c: {}, ['--include', name], files={name: text} if text else {})
+            self.assertEqual(e.exception.code, 2)
+
+    def test_worker_gets_the_secret_paths(self):
+        got = []
+
+        def fake(w, ctx):
+            got.extend(ctx.secrets)
+            return {'worker': 'x', 'code': 0, 'conversation_id': None, 'response': 'r', 'calls': '?', 'denied': []}
+        self.run_main(fake, files={'.env': 'K=1', 'app/main.py': 'x'})
+        self.assertEqual([Path(p).name for p in got], ['.env'])
 
 
 class Results(unittest.TestCase):
@@ -362,61 +476,6 @@ class Results(unittest.TestCase):
         self.assertEqual(self.agy({'response': ''})['code'], 5)
         bad = d.parse_agy_stream('a\nb\nc\nd\n', 'm1')
         self.assertEqual((bad['code'], bad['error']), (6, 'b c d'))
-
-    def test_copilot_events(self):
-        ev = [{'type': 'model.call_start'}, {'type': 'model.call_start'},
-              {'type': 'tool.execution_start', 'data': {'toolCallId': 't1', 'toolName': 'shell', 'arguments': {'command': 'git push'}}},
-              {'type': 'tool.execution_complete', 'data': {'toolCallId': 't1', 'error': {'code': 'denied'}}},
-              {'type': 'assistant.message', 'data': {'content': 'first'}},
-              {'type': 'assistant.message', 'data': {'content': 'final report'}},
-              {'type': 'result', 'sessionId': 's9'}]
-        p = d.parse_copilot_events('not json\n' + '\n'.join(json.dumps(e) for e in ev))
-        self.assertEqual(p, {'conversation_id': 's9', 'response': 'final report', 'error': '', 'calls': 2,
-                             'denied': ['shell: git push']})
-
-    def test_log_tokens(self):
-        with tempfile.TemporaryDirectory() as t:
-            Path(t, 'a.log').write_text('"prompt_tokens": 100, "completion_tokens": 5\n"prompt_tokens": 200, '
-                                        '"completion_tokens": 7, "cached_tokens": 50', encoding='utf-8')
-            r = d.log_tokens(t)
-            self.assertEqual((r['in'], r['out'], r['cached'], r['last'], r['total'], r['calls']), (300, 12, 50, 207, 312, 2))
-        self.assertEqual(d.log_tokens(Path(t) / 'gone')['total'], 0)
-
-    def test_log_tokens_reads_only_new_lines(self):
-        with tempfile.TemporaryDirectory() as t:
-            f = Path(t, 'a.log')
-            f.write_text('"prompt_tokens": 100, "completion_tokens": 5\n"prompt_tok', encoding='utf-8')
-            log = d.LogTokens(t)
-            self.assertEqual((log.read()['in'], log.read()['calls']), (100, 1))   # the half line waits
-            with open(f, 'a', encoding='utf-8') as fh:
-                fh.write('ens": 200, "completion_tokens": 7\n')
-            r = log.read()
-            self.assertEqual((r['in'], r['out'], r['calls'], r['last']), (300, 12, 2, 207))
-            with open(f, 'a', encoding='utf-8') as fh:
-                fh.write('"prompt_tokens": 50')   # no newline at the end: only a final read takes it
-            self.assertEqual(log.read()['in'], 300)
-            self.assertEqual(log.read(final=True)['in'], 350)
-
-    def test_openai_guard(self):
-        self.assertEqual(d.openai_tier('o3'), 'big')
-        self.assertEqual(d.openai_tier('gpt-5.4-mini'), 'mini')
-        self.assertIsNone(d.openai_tier('gpt-5.5'))
-        with tempfile.TemporaryDirectory() as t:
-            log = Path(t, 'u.jsonl')
-            log.write_text('﻿' + json.dumps({'day': d.utc_day(), 'tier': 'big', 'tokens': 100}) + '\n'
-                           + json.dumps({'day': '2000-01-01', 'tier': 'big', 'tokens': 999}) + '\nbroken\n'
-                           + json.dumps({'day': d.utc_day(), 'tier': 'mini', 'tokens': 5}) + '\n', encoding='utf-8')
-            self.assertEqual(d.openai_used_today(log, 'big'), 100)
-            self.assertEqual(d.openai_used_today(Path(t, 'none'), 'big'), 0)
-
-    def test_paid_openai_model_refused_without_running(self):
-        ctx = d.Ctx()
-        ctx.args = None
-        ctx.openai_log = Path(tempfile.gettempdir()) / 'never-written.jsonl'
-        r = d.invoke_copilot({'h': 'cp', 'p': 'openai', 'pm': 'gpt-5.5'}, ctx)
-        self.assertEqual(r['code'], 6)
-        self.assertIn('REFUSED', r['error'])
-
 
 class Processes(unittest.TestCase):
     def test_run_tool_output_and_stdin(self):
@@ -461,19 +520,83 @@ class Processes(unittest.TestCase):
 
 
 class Bench(unittest.TestCase):
-    def test_hidden_tests_pass_on_the_solution_and_fail_on_the_start(self):
-        import shutil
+    @staticmethod
+    def reference(task, tmp):
+        """solution/answer.md with each {bug id} replaced by that bug's line in tmp (review and debug tasks)."""
+        import bench
+        text = (task['dir'] / 'solution' / 'answer.md').read_text(encoding='utf-8')
+        for spot in bench.answers(tmp, task)['bugs']:
+            text = text.replace('{' + spot['id'] + '}', str(spot['line']))
+        return text
+
+    def test_every_task_scores_full_on_its_solution_and_low_on_its_start(self):
         import bench
         tasks = bench.load_tasks()
-        self.assertGreaterEqual(len(tasks), 2)
+        self.assertGreaterEqual(len(tasks), 12)
+        self.assertEqual({t['kind'] for t in tasks}, {'build', 'tester', 'review', 'debug'})
+        self.assertTrue({'builder', 'builderplus', 'tester', 'reviewer', 'debugger', 'security-reviewer'} <= {t['role'] for t in tasks})
         for task in tasks:
+            name = task['name']
+            for f in task['files'] + task.get('include', []):
+                d.project_path(f, name)   # every bench path passes delegate's path policy
+            if task.get('role_file'):
+                self.assertTrue((d.ROOT / task['role_file']).exists(), name)
+            answer = task['kind'] in ('review', 'debug')
             with tempfile.TemporaryDirectory() as t:
-                shutil.copytree(task['dir'] / 'solution', t, dirs_exist_ok=True)
-                self.assertEqual(bench.score(t, task), task['tests'], task['name'])
+                bench.lay_out(task, t, ('start',) if answer else ('start', 'solution'))
+                for f in task.get('include', []):
+                    self.assertTrue(Path(t, f).exists(), f'{name}: {f}')
+                got, missed, note = bench.score(t, task, self.reference(task, t) if answer else '')
+                self.assertEqual((got, missed), (task['tests'], []), name)
+                if task.get('project') and task['kind'] == 'build':
+                    kept, total = note.split()[1].split('/')
+                    self.assertEqual(kept, total, name)
+                if task['kind'] == 'review':
+                    self.assertEqual(note, '0 false', name)
             with tempfile.TemporaryDirectory() as t:
-                if (task['dir'] / 'start').exists():
-                    shutil.copytree(task['dir'] / 'start', t, dirs_exist_ok=True)
-                self.assertLess(bench.score(t, task), task['tests'] // 2, task['name'])
+                bench.lay_out(task, t)
+                got, missed, _ = bench.score(t, task, '')
+                self.assertLess(got, max(1, task['tests'] // 2), name)
+                self.assertTrue(missed, name)
+
+    def test_review_and_debug_decoys_cost(self):
+        import bench
+        for name in ('sk_review',):
+            task = bench.load_tasks([name])[0]
+            with tempfile.TemporaryDirectory() as t:
+                bench.lay_out(task, t)
+                data = bench.answers(t, task)
+                bug, decoy = data['bugs'][0], data['decoys'][0]
+                report = f"Problems:\n- {bug['file']}:{bug['line']}: x\n- {decoy['file']}:{decoy['line']}: y"
+                got, missed, note = bench.score(t, task, report)
+                self.assertEqual((got, note), (1, '1 false'), name)
+                self.assertIn(f"false alarm at decoy {decoy['id']}", missed)
+        task = bench.load_tasks(['sk_debug'])[0]
+        with tempfile.TemporaryDirectory() as t:
+            bench.lay_out(task, t)
+            data = bench.answers(t, task)
+            cause, decoy = data['bugs'][0], data['decoys'][0]
+            self.assertEqual(bench.score(t, task, f"{decoy['file']}:{decoy['line']} then {cause['file']}:{cause['line']}")[0], 0)
+            self.assertEqual(bench.score(t, task, f"{cause['file']}:{cause['line']}")[0], 1)   # place, no reason
+
+    def test_tester_task_scores_caught_mutants(self):
+        import bench
+        for name in ('duration', 'sk_tester'):
+            task = bench.load_tasks([name])[0]
+            self.assertEqual(len(list((task['dir'] / 'hidden' / 'mutants').glob('*.py'))), task['tests'], name)
+        task = bench.load_tasks(['duration'])[0]
+        with tempfile.TemporaryDirectory() as t:
+            bench.lay_out(task, t)
+            Path(t, 'tests').mkdir()
+            weak = ('import unittest\nfrom duration import parse_duration\n\n\nclass T(unittest.TestCase):\n'
+                    '    def test_h(self):\n        self.assertEqual(parse_duration("1h"), 3600)\n')
+            Path(t, 'tests', 'test_duration.py').write_text(weak, encoding='utf-8')
+            got, missed, _ = bench.score(t, task)
+            self.assertLess(got, task['tests'])
+            self.assertIn('m05_zero_empty', missed)
+            self.assertEqual(Path(t, 'duration.py').read_bytes(), (task['dir'] / 'start' / 'duration.py').read_bytes())   # restored
+            Path(t, 'tests', 'test_duration.py').write_text(weak.replace('3600', '3601'), encoding='utf-8')
+            self.assertEqual(bench.score(t, task), (0, ['its tests fail on the real code'], ''))
 
     def test_prepare_makes_a_runnable_project(self):
         import bench
@@ -487,20 +610,29 @@ class Bench(unittest.TestCase):
                 self.assertTrue(Path(t, f).exists(), f)
             self.assertFalse(Path(t, 'agent', 'bench').exists(), 'the worker must not see the hidden tests')
             self.assertEqual(d.git_snapshot(t), {})
+        task = bench.load_tasks(['sk_security'])[0]
+        with tempfile.TemporaryDirectory() as t:
+            text = Path(bench.prepare(task, t)).read_text(encoding='utf-8')
+            self.assertIn('+++ b/shop/exports.py', text)          # the change, pasted as a diff
+            self.assertIn('--- a/shop/cli.py', text)
+            for f in ('agent/roles/security-reviewer.md', 'shop/exports.py', 'shop/discounts.py', 'tests/test_exports.py'):
+                self.assertTrue(Path(t, f).exists(), f)
+            self.assertFalse(Path(t, 'agent', 'bench').exists())
 
     def test_worker_flags_and_table(self):
         import bench
-        self.assertEqual(bench.worker_flags('agy:gemini-3.8-flash-low'), ['--model', 'gemini-3.8-flash-low'])
-        self.assertEqual(bench.worker_flags('nvidia'), ['--provider', 'nvidia'])
-        self.assertEqual(bench.worker_flags('openrouter:a/b:free'), ['--provider', 'openrouter', '--provider-model', 'a/b:free'])
-        text = bench.table([{'worker': 'nvidia', 'task': 't', 'passed': 3, 'tests': 4, 'exit': 'OK', 'seconds': 9}])
-        self.assertIn('| nvidia | t | 3/4 | OK |', text)
+        self.assertEqual(bench.worker_flags('agy:gemini-3.8-flash-low'), ['--worker', 'agy:gemini-3.8-flash-low'])
+        self.assertEqual(bench.worker_flags('codex:gpt-5.6-luna:low'), ['--worker', 'codex:gpt-5.6-luna:low'])
+        with self.assertRaises(d.Fail):
+            bench.worker_flags('nvidia')
+        text = bench.table([{'worker': 'codex:m', 'task': 't', 'level': 'easy', 'passed': 3, 'tests': 4, 'exit': 'OK', 'seconds': 9}])
+        self.assertIn('| codex:m | t | easy | 3/4 |  |  | OK |', text)
 
 
 class CheckSetup(unittest.TestCase):
     def test_keeps_confirmed_answers(self):
-        new = check_setup.build_md([('git', 'found', 'n')], {'agy': True, 'nvidia': False}, '2026-01-01 00:00')
-        self.assertIn('```available\nagy: yes\nnvidia: no\n```', new)
+        new = check_setup.build_md([('git', 'found', 'n')], {'agy': True, 'codex': False}, '2026-01-01 00:00')
+        self.assertIn('```available\nagy: yes\ncodex: no\n```', new)
         self.assertNotIn('Ollama', new)
         old = new.replace('<which plan>', 'Max')
         merged = check_setup.keep_confirmed(new, old)

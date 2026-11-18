@@ -7,7 +7,7 @@ and **cheaper AI models do the work**. Clone it once per project.
 
 Claude (in Claude Code) is the **boss**. It is smart but expensive, so it does the thinking: understand what you
 want, plan, write exact instructions, check every result, and save the work in git. The actual making (code, text,
-data) is handed to **cheap or free AI models** ("workers"). Workers are fast but make mistakes, so nothing they do
+data) is handed to **cheaper AI models** ("workers") on subscriptions you already have. Workers are fast but make mistakes, so nothing they do
 is trusted until Claude has checked it.
 
 ## Starting a new project
@@ -23,10 +23,10 @@ is trusted until Claude has checked it.
    git remote set-url origin https://github.com/<you>/my-project.git
    ```
 2. Set up what you have (you don't need everything): see [agent/setup/README.md](agent/setup/README.md).
-   Put your API keys in `.env` (copy `.env.example`; it is never committed).
+   No API keys: workers run through agy (Google AI Pro) and Codex (ChatGPT plan).
 3. Write **[GOAL.md](GOAL.md)**: what you want, in your own words, with as much detail as you can.
 4. Open the folder in Claude Code and say "let's start". Claude then:
-   - checks which tools and keys work on your PC (writes `SETUP.md`) and asks a few questions about your plans;
+   - checks which worker tools work on your PC (writes `SETUP.md`) and asks a few questions about your plans;
    - reads your goal and asks about anything important that's missing;
    - picks a **pack** for your kind of project (software, game, research, automation);
    - proposes the **roles** (which workers, doing what, with which models) for you to approve;
@@ -39,8 +39,8 @@ is trusted until Claude has checked it.
 |---|---|
 | **Lead** | Claude. Plans, checks, decides, commits. |
 | **Worker** | A cheaper AI model that does one small, clearly described job. |
-| **Model** | The "brain" (Gemini, Mistral, o3, ...). On its own a model can only send back text. |
-| **Harness** | The program that lets a model actually *do* things on your PC: open and write files, run checks. We use **agy** (Google's Antigravity CLI) and **Copilot CLI** (GitHub). It asks the model what it wants to do, checks if that's allowed, and does it. |
+| **Model** | The "brain" (Gemini, GPT, Claude Sonnet, ...). On its own a model can only send back text. |
+| **Harness** | The program that lets a model actually *do* things on your PC: open and write files. We use **agy** (Google's Antigravity CLI) and **Codex CLI** (OpenAI). It asks the model what it wants to do, checks if that's allowed, and does it. |
 | **Role** | A job description for a worker: what it does, which models may do it, and its rules. |
 | **Pack** | A ready-made set of roles and advice for one kind of project. |
 | **`agent/delegate.py`** | The one script that sends a job to a worker: picks the model, adds the rules, runs it safely, reports back. |
@@ -60,21 +60,25 @@ Every role is one small file in `agent/roles/`. It says:
 - its **models**: first choice, then fallbacks if that one is busy or out of quota;
 - its **own rules**: a few lines about what's special about the job.
 
-Default roles: **builder**, **builderplus** (bigger changes), **tester**, **reviewer**, **scribe**.
-Packs add more, like a game **designer** or a research **fact-checker**. To make your own, copy
+Default roles: **builder**, **builderplus** (bigger changes), **tester**, **reviewer**, **scribe**, **debugger**
+(finds why a fix keeps failing, without fixing it) and **mapper** (drafts the knowledge map for existing code).
+Packs add more, like a game **designer**, a research **fact-checker** or a software **visual-reviewer**. To make your own, copy
 [templates/roles/ROLE-TEMPLATE.md](templates/roles/ROLE-TEMPLATE.md); it explains every line.
 Claude usually proposes the roles for you.
 
-Default models (all free, or covered by subscriptions you already have):
+Default models (covered by subscriptions you already have):
 
 | Role | 1st choice | 2nd | 3rd |
 |---|---|---|---|
-| builder | Gemini 3.8 Flash Low (agy) | Gemini Flash-Lite (Gemini API) | Nemotron Ultra (OpenRouter, free), then Mistral Large 4 (NVIDIA) |
-| builderplus | Gemini 3.8 Flash Medium (agy) | Nemotron Ultra (OpenRouter, free) | Mistral Large 4 (NVIDIA) |
-| tester | Gemini Flash-Lite (Gemini API) | Nemotron Ultra (OpenRouter, free) | Mistral Large 4 (NVIDIA) |
-| reviewer | Claude Sonnet 4.6 (agy) | o3 (OpenAI free tokens) | gpt-oss-120b (agy) |
-| scribe | Nemotron Lightning (NVIDIA) | Gemini 3.8 Flash Low (agy) | Nemotron Ultra (OpenRouter, free) |
+| builder | Gemini 3.8 Flash Low (agy) | GPT-6 Luna, low (Codex) | |
+| builderplus | GPT-6.1 Sol, medium (Codex) | GPT-6 Astra, high (Codex) | Gemini 3.8 Flash Medium (agy) |
+| tester | GPT-6 Luna, medium (Codex) | Gemini 3.8 Flash Low (agy) | |
+| reviewer | Claude Sonnet 4.6 (agy) | GPT-6.1 Sol, medium (Codex) | gpt-oss-120b (agy) |
+| scribe | Gemini 3.8 Flash Low (agy) | GPT-6 Luna, low (Codex) | |
+| debugger | GPT-6 Astra, high (Codex) | Claude Sonnet 4.6 (agy) | |
+| mapper | Gemini 3.8 Flash Medium (agy) | GPT-6.1 Sol, low (Codex) | |
 
+A tester or reviewer never uses the same model family as the builder it checks: `delegate.py` skips that family.
 Workers you haven't set up are skipped automatically. Why this order, and every other model: [agent/MODELS.md](agent/MODELS.md).
 
 ## Packs
@@ -93,7 +97,8 @@ Each pack says what a good goal should cover, how to check the work, how to spli
 1. Claude writes a short task: the goal, which files, the exact spec, what must be covered.
 2. `delegate.py` adds the role's rules and the notes from `PROJECT.md`, and pastes in the files the worker needs.
 3. It starts the worker with **only the tools its role allows**, inside a **sandbox**: it can't touch anything outside
-   the project, can't use git, can't browse the web, can't run commands.
+   the project, can't use git, can't browse the web, can't run commands, and can't read or write secret files such as
+   `.env` or keys.
 4. The worker does its piece and ends with a short report. Then `delegate.py` runs the project's check command on
    that piece. If it fails, the worker gets the output to fix it, and the check runs again (a second time only if the
    first fix changed the failure: a worker that is stuck goes back to Claude).
@@ -105,24 +110,19 @@ Each pack says what a good goal should cover, how to check the work, how to spli
 | Tiny (under ~30 lines) | Claude just does it; explaining would take longer. |
 | Small (1 file) | 1 worker, then Claude checks. |
 | Medium (2-4 files) | 2 workers at once on different files, then a tester and a reviewer, then Claude fixes and commits. |
-| Large (5+ files) | Claude writes a spec first, workers go in waves (max 4 at once), then testers/reviewers and a final check. |
+| Large (5+ files) | Claude writes a spec first, workers go in waves (max 3 at once), then testers/reviewers and a final check. |
 
 ## Money, limits and privacy
 
-| Provider | Costs | Free limit |
+| Tool | Costs | Limit |
 |---|---|---|
 | Claude | Your Claude plan | Plan limits; kept for thinking and checking |
 | agy | Google AI Pro plan | Resets every 5 hours; ~20 worker jobs use 6-7% of a window |
-| NVIDIA | Free | ~40 requests a minute |
-| Gemini API | Free | ~500 requests a day (Flash-Lite) |
-| OpenRouter | Free models cost nothing | 50 a day, or 1000 a day once you ever bought $10 credit |
-| OpenAI | Small prepaid credit | Free daily tokens with data sharing on: 250k (big models), 2.5M (small) |
+| Codex | Your ChatGPT plan | The plan's Codex limits (shared with your own Codex use) |
 
-- **OpenAI guard:** `delegate.py` refuses models that would bill your credit, and stops at 90% of the free daily
-  tokens, also in the middle of a job. Its count is an estimate; OpenAI's usage page is the real number.
-- **Privacy:** the free tiers of NVIDIA, Gemini API, OpenRouter and OpenAI may read or train on what you send.
-  A project is private until `PROJECT.md` says `private: no`: until then `delegate.py` only uses agy.
-  Workers through Copilot can't read or write `.env`, so your keys don't reach a cloud model.
+- **Privacy:** no free tiers that train on what you send. A project is private until `PROJECT.md` says `private: no`;
+  private projects may use agy and Codex. Turn off "Improve the model for everyone" in ChatGPT first.
+- Workers never get `.env`, keys or credential files: `delegate.py` refuses to paste them in and denies them to every worker.
 
 ## Keeping tokens (and so cost and speed) down
 
@@ -150,18 +150,17 @@ included), and `grep -rh "^> " knowledge` prints the whole map in one screen.
 | `agent/roles/` | The roles in use in this project. |
 | `agent/bases/` | The core rules for each base type. |
 | `agent/delegate.py` | Runs a worker. `agent/check_setup.py` checks your setup. |
-| `agent/MODELS.md` | Which model to pick per role, with ratings. `agent/LIMITS.md`: cost and free limits per provider. |
-| `agent/models.json` | The models, providers and limits `delegate.py` knows. Add a provider here, no code needed. |
-| `agent/bench.py` | Rates your own models: small tasks, scored with tests the worker never sees. |
+| `agent/MODELS.md` | Which model to pick per role, with ratings. `agent/LIMITS.md`: cost and limits per tool. |
+| `agent/models.json` | The models, model families and harness rules `delegate.py` knows. |
+| `agent/bench.py` | Rates your own models per role: easy tasks and real ones on a small shop project (`agent/bench/_projects/`), scored with hidden tests, planted bugs or answer keys the worker never sees. |
 | `agent/START.md` | The steps Claude follows at the start of a project. |
 | `agent/notes/` | Measurements and lessons about the setup itself, one small note each. |
 | `knowledge/` | The project's knowledge map: one small note per part, lesson or decision (see below). |
 | `agent/check_docs.py` | Checks the notes (broken links, notes nobody links to, file paths that no longer exist); `--find <words>` searches them. |
-| `agent/setup/` | How to install each tool and get each key. |
+| `agent/setup/` | How to install and sign in to each tool. |
 | `templates/` | Role template, project packs and note templates. |
 | `.agents/agents/` | Trimmed tool sets for agy workers (your own agy chats are not affected). |
-| `.env` / `.env.example` | Your API keys (never committed) / the empty template. |
-| `.worker/` | Scratch space for tasks, results and the OpenAI usage counter (not committed). |
+| `.worker/` | Scratch space for tasks, results and benchmark rows (not committed). |
 
 ## Running a worker yourself
 
@@ -170,9 +169,10 @@ python agent/delegate.py --role builder --task-file .worker/t1.md --part shop --
 ```
 
 - `--role` picks the role (any file in `agent/roles/`). `--include` pastes files into the task.
-- `--model` (an agy model) or `--provider` + `--provider-model` force one specific worker.
-- Result codes: 0 OK, 2 unknown role or no task, 3 took too long, 4 tried something forbidden, 5 empty answer,
-  6 provider problem or no worker available.
+- `--model` (an agy model) or `--worker codex:gpt-6.1-sol:medium` force one specific worker.
+- Testers and reviewers need `--after <the builder's run id>` (or `--after lead`).
+- Result codes: 0 OK, 2 bad input, 3 took too long, 4 blocked (a secret or outside path, or a forbidden action),
+  5 empty answer, 6 worker problem, quota, or no worker available, 7 check still failing.
 
 ## Known weak spots
 
@@ -180,4 +180,5 @@ python agent/delegate.py --role builder --task-file .worker/t1.md --part shop --
 - Workers can't create folders and can't browse the web; Claude does those parts.
 - agy is sometimes busy ("no capacity"); the next worker in the chain takes over.
 - agy workers can only run commands allowed in agy's global settings (see `agent/setup/agy.md`).
-- If a file called `AGENTS.md` or `GEMINI.md` is in the project, agy loads it into every worker. Don't add one.
+- If a file called `AGENTS.md` or `GEMINI.md` is in the project, agy (and Codex, for `AGENTS.md`) loads it into every worker. Don't add one.
+- The Codex worker is built from Codex's docs and not run yet: [agent/setup/codex.md](agent/setup/codex.md) has the smoke test.

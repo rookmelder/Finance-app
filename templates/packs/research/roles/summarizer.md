@@ -1,5 +1,6 @@
 ---
 base: scribe
+models: agy:gemini-3.8-flash-medium, codex:gpt-6-luna:low
 does: Turns source files into short cited notes per sub-question.
 ---
 - Read only the source files the task names (in `sources/`). Write only the notes file the task names (in `notes/`).

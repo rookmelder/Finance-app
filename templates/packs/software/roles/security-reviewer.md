@@ -1,6 +1,6 @@
 ---
 base: reviewer
-models: agy:claude-sonnet-4-6, openai:o3, agy:gpt-oss-120b-medium
+models: agy:claude-sonnet-4-6, codex:gpt-6-astra:high
 does: Checks a change for security problems (input, auth, secrets, files, network).
 ---
 Only security problems; ignore style and design. For each checklist item: quote, YES/NO, 1 sentence.

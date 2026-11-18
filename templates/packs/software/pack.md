@@ -28,4 +28,5 @@ Worker notes to consider: language version and allowed libraries; folder layout;
 - Workers love to "improve" nearby code: name the exact files in every task.
 
 ## Roles in this pack
-- `security-reviewer`: checks a change for security problems.
+- `security-reviewer`: checks a change for security problems. Run it on risky pieces only (input, auth, secrets, files, network).
+- `visual-reviewer`: checks UI screenshots against the spec (the Lead takes the screenshots; workers can't run the app).

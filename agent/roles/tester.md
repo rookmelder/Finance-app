@@ -1,5 +1,5 @@
 ---
 base: tester
-models: gemini:gemini-flash-lite-latest, openrouter:nvidia/nemotron-3-ultra-550b-a55b:free, nvidia:mistralai/mistral-large-4-1t-a52b
+models: codex:gpt-6-luna:medium, agy:gemini-3.8-flash-low
 does: Writes tests/checks for work it did not make; never fixes the work.
 ---

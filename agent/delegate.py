@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
-"""Send one task to a worker (agy or Copilot+cloud API) by role, with safe defaults.
+"""Send one task to a worker (agy or Codex) by role, with safe defaults.
 
 Examples (from the project root; Windows, Linux and macOS):
   python agent/delegate.py --role builder --task-file .worker/t1.md --include src/shop.py
-  python agent/delegate.py --role reviewer --task-file .worker/review.md
-  python agent/delegate.py --role builder --provider nvidia --task-file .worker/t1.md   # force one worker
+  python agent/delegate.py --role reviewer --after 3fa2b1c0 --task-file .worker/review.md
+  python agent/delegate.py --role builder --worker codex:gpt-6.1-sol:medium --task-file .worker/t1.md   # force one worker
 
 Roles: any agent/roles/<name>.md (frontmatter: base, models). Core rules per base: agent/bases/<base>.md.
-Each role has a worker chain; workers missing on this machine (SETUP.md) are skipped. On a transient
-provider error (429/503/no capacity) it retries once, then moves on. --model / --provider force one worker.
-Models, providers and limits live in agent/models.json.
+Each role has a worker chain (agy:<model> or codex:<model>[:<effort>]); workers missing on this machine (SETUP.md)
+are skipped. On a busy/quota error it retries once when the wait is short, then moves on. --model / --worker force one.
+Models, families and harness rules live in agent/models.json.
 Workers run no commands. For builder/tester roles this script runs check_one itself after the worker is done
 (--part fills {name}); when it fails, the worker gets the output to fix it, then the check runs again
 (a second round only if the first one changed the failure).
 For reviewer roles the check runs first and its result is pasted into the task.
-A reviewer with --include (or a scribe writing one .md file) on an API model runs as ONE plain API call: no harness, no tools.
+Tester and reviewer roles need --after <builder run id> (or --after lead): they never run on the builder's model family.
+Paths: --include and --files must stay inside the project and never name a secret (.env, keys, credentials);
+workers are denied reading or writing the secret files this script finds in the project.
 --files names what the task may change: with workers in parallel, each run then reports only its own files.
 Output: a short summary (full JSON saved in .worker/run-<id>.json and .worker/last.json); --json prints the JSON instead.
-Exit: 0 ok, 2 no task, 3 timeout (check git status: files often exist), 4 blocked, 5 empty, 6 provider error,
+Exit: 0 ok, 2 bad input, 3 timeout (check git status: files often exist), 4 blocked, 5 empty, 6 worker error,
 7 check failed.
 Project settings (check commands, worker notes) come from PROJECT.md. Standard library only.
 """
 import argparse
-import datetime
 import fnmatch
-import glob
 import hashlib
 import json
 import os
@@ -35,8 +35,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 import uuid
 from pathlib import Path
 
@@ -44,19 +42,26 @@ AGENT_DIR = Path(__file__).resolve().parent      # agent/: this script, bases/, 
 ROOT = AGENT_DIR.parent                           # project root: workers work here
 IS_WIN = os.name == 'nt'
 
-CONFIG = json.loads((AGENT_DIR / 'models.json').read_text(encoding='utf-8-sig'))   # models, providers, limits: edit that file
+CONFIG = json.loads((AGENT_DIR / 'models.json').read_text(encoding='utf-8-sig'))   # models, families: edit that file
 _plain = lambda d: {k: v for k, v in d.items() if not k.startswith('_')}
 AGY_MODELS = CONFIG['agy_models']
+CODEX_EFFORTS = CONFIG['codex_efforts']
+FAMILIES = _plain(CONFIG['families'])                  # model id prefix -> family
+PRIVATE_OK = CONFIG['private_ok']                      # harnesses a private project may use
+HARNESSES = ('agy', 'codex')
 BASES = ('builder', 'tester', 'reviewer', 'scribe')
 DEFAULT_MODELS = _plain(CONFIG['default_models'])      # used when a role file has no models: line
-PROVIDERS = _plain(CONFIG['providers'])                # OpenAI-compatible APIs: url, key name, default model
-OPENAI_FREE = _plain(CONFIG['openai_free'])            # free daily tokens: only these models, up to these limits
-OPENAI_RUN_CAP = _plain(CONFIG['openai_run_cap'])      # max tokens per single run
-MAX_CALLS = int(CONFIG.get('max_calls') or 40)         # Copilot workers: stop a run after this many model calls
-TRANSIENT = re.compile(r'429|503|UNAVAILABLE|RESOURCE_EXHAUSTED|capacity|rate limit|overloaded|timed out')
-LABELS = {0: 'OK', 3: 'TIMEOUT (check git status)', 4: 'BLOCKED', 5: 'EMPTY', 6: 'PROVIDER ERROR', 7: 'CHECK FAILED'}
-MAX_RETRY_WAIT = 120   # a provider asking for a longer wait: go to the next worker instead
+TRANSIENT = re.compile(r'429|503|UNAVAILABLE|RESOURCE_EXHAUSTED|capacity|rate limit|overloaded|timed out', re.I)
+LABELS = {0: 'OK', 3: 'TIMEOUT (check git status)', 4: 'BLOCKED', 5: 'EMPTY', 6: 'WORKER ERROR', 7: 'CHECK FAILED'}
+MAX_RETRY_WAIT = 120   # a worker asking for a longer wait: go to the next worker instead
 CHECK_TAIL_LINES, CHECK_TAIL_CHARS = 60, 6000   # how much check output a worker / the summary gets
+
+# Secret files: never pasted in, never in --files, denied to every worker.
+SECRET_NAME = re.compile(r'^(\.env(\.(?!(example|sample|template|dist)$)[^/]+)?|\.netrc|\.git-credentials|\.npmrc|\.pypirc'
+                         r'|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|credentials(\.json)?|.+\.(pem|key|p12|pfx|jks|keystore))$', re.I)
+SECRET_GLOBS = ['**/.env', '**/.env.*', '**/*.pem', '**/*.key', '**/*.p12', '**/*.pfx', '**/id_rsa*', '**/id_ed25519*',
+                '**/.netrc', '**/.git-credentials', '**/credentials.json']   # Codex deny-read patterns (on top of the files found)
+SKIP_DIRS = {'.git', 'node_modules', '.venv', 'venv', '__pycache__', '.worker', '.mypy_cache', '.pytest_cache'}
 
 
 class Fail(Exception):
@@ -69,42 +74,7 @@ def read_text(path):
     return Path(path).read_text(encoding='utf-8-sig')
 
 
-def utc_day():
-    return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
-
-
 # --- Files the scripts read ----------------------------------------------------------------
-def parse_env_file(text):
-    """KEY=VALUE lines from .env (empty values skipped, surrounding quotes removed)."""
-    out = {}
-    for line in text.splitlines():
-        m = re.match(r'^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$', line)
-        if m and m.group(2):
-            out[m.group(1)] = m.group(2).strip('"')
-    return out
-
-
-def load_env(root):
-    """Real environment variables win; otherwise .env values are set for this process only."""
-    f = Path(root) / '.env'
-    if f.exists():
-        for k, v in parse_env_file(read_text(f)).items():
-            if not os.environ.get(k):
-                os.environ[k] = v
-
-
-def windows_user_env(name):
-    """A user-level variable set after this shell started (Windows only)."""
-    if not IS_WIN:
-        return None
-    try:
-        import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as k:
-            return winreg.QueryValueEx(k, name)[0]
-    except OSError:
-        return None
-
-
 def parse_project(text):
     """PROJECT.md: the ```settings block, the '## Worker notes' section and the Private flag."""
     proj = {'check_one': '', 'check_all': '', 'check_dir': '', 'private': ''}
@@ -120,7 +90,7 @@ def parse_project(text):
         notes = m.group(1).strip()
     if notes.startswith('- <'):   # template placeholder, not filled in
         notes = ''
-    # Private = only agy. Anything but a clear "no" counts as private, so a typo never opens the cloud.
+    # Private = only the harnesses in models.json private_ok. Anything but a clear "no" counts as private.
     val = proj.get('private', '').lower()
     if val in ('yes', 'no'):
         private = val == 'yes'
@@ -144,13 +114,32 @@ def parse_role(text):
 
 
 def to_worker(s):
-    """'agy:gemini-3.8-flash-low' | 'nvidia' | 'openrouter:vendor/model:free'"""
+    """'agy:gemini-3.8-flash-low' | 'codex:gpt-6.1-sol' | 'codex:gpt-6-luna:low' -> {'h', 'm', 'e'}"""
     head, _, rest = s.strip().partition(':')
-    return {'h': 'agy', 'm': rest} if head == 'agy' else {'h': 'cp', 'p': head, 'pm': rest}
+    model, _, effort = rest.partition(':')
+    if head not in HARNESSES or not model:
+        raise Fail(f"Worker '{s.strip()}': write agy:<model> or codex:<model>[:<effort>].", 2)
+    if head == 'agy' and effort:
+        raise Fail(f"Worker '{s.strip()}': agy models have no :<effort> (pick another agy model instead).", 2)
+    if effort and effort not in CODEX_EFFORTS:
+        raise Fail(f"Worker '{s.strip()}': effort must be one of {', '.join(CODEX_EFFORTS)}.", 2)
+    return {'h': head, 'm': model, 'e': effort}
 
 
 def parse_chain(models):
     return [to_worker(x) for x in models.split(',') if x.strip()]
+
+
+def worker_name(w):
+    return f"{w['h']} {w['m']}" + (f" ({w['e']})" if w.get('e') else '')
+
+
+def family(model):
+    """Model id -> family (models.json families), so a tester/reviewer never checks its own family's work."""
+    for prefix, fam in FAMILIES.items():
+        if (model or '').startswith(prefix):
+            return fam
+    return model or ''
 
 
 def parse_available(text):
@@ -167,35 +156,39 @@ def parse_available(text):
 
 
 def is_available(w, available):
-    if available is None:
-        return True
-    name = 'agy' if w['h'] == 'agy' else w['p']
-    if name not in available and name in PROVIDERS:   # added in models.json, unknown to check_setup.py
-        return bool(os.environ.get(PROVIDERS[name]['key']))
-    return bool(available.get(name))
+    return available is None or bool(available.get(w['h']))
 
 
-def copilot_tools(base, check_dir):
-    """Copilot tools per role: only what the role needs (each tool definition is resent on every call).
-    No worker gets a shell tool: this script runs the check command itself."""
-    tester_write = f'write({check_dir}/**)' if check_dir else 'write'
-    return {
-        'builder': {'tools': 'view,create,edit,grep,glob', 'allow': ['write']},
-        'tester': {'tools': 'view,create,edit,grep,glob', 'allow': [tester_write]},
-        'scribe': {'tools': 'view,create,edit,grep,glob', 'allow': ['write(**/*.md)']},
-        'reviewer': {'tools': 'view,grep,glob', 'allow': []},
-    }[base]
+# --- Paths: inside the project, never a secret ---------------------------------------------
+def is_secret(path):
+    return bool(SECRET_NAME.match(str(path).replace('\\', '/').rstrip('/').rsplit('/', 1)[-1]))
 
 
-def retry_wait(error):
-    """Seconds to wait before retrying a busy provider: what its error asks for (Retry-After, Gemini's retryDelay,
-    "retry in 17s"), else 20. None = it asks for more than MAX_RETRY_WAIT: don't retry, try the next worker."""
-    m = re.search(r'retry[ _-]?after\W{0,4}(\d+(?:\.\d+)?)|retryDelay\W{0,4}(\d+(?:\.\d+)?)s|'
-                  r'(?:retry|try again) in (\d+(?:\.\d+)?)\s*s', str(error or ''), re.I)
-    if not m:
-        return 20
-    wait = float(next(g for g in m.groups() if g))
-    return None if wait > MAX_RETRY_WAIT else int(wait + 0.999) + 1
+def project_path(p, what):
+    """A path or glob the Lead gave (--include, --files) -> relative to the project root, with / slashes.
+    Refused (exit 4): outside the project, inside .git/, or a secret file."""
+    raw = str(p).strip()
+    full = raw if os.path.isabs(raw) else os.path.join(str(ROOT), raw)
+    try:
+        rel = os.path.relpath(os.path.realpath(full), os.path.realpath(str(ROOT))).replace('\\', '/')
+    except ValueError:   # another drive (Windows)
+        rel = '../'
+    if rel == '..' or rel.startswith('../') or os.path.isabs(rel):
+        raise Fail(f"{what} '{raw}': outside the project folder. Workers only get files from the project.", 4)
+    if rel.split('/')[0] == '.git':
+        raise Fail(f"{what} '{raw}': inside .git/.", 4)
+    if is_secret(rel):
+        raise Fail(f"{what} '{raw}': a secret file (.env, keys, credentials) never goes to a worker.", 4)
+    return rel
+
+
+def secret_files(root):
+    """Absolute paths of the secret files in the project (what workers are denied), skipping .git and caches."""
+    out = []
+    for d, dirs, files in os.walk(str(root)):
+        dirs[:] = [x for x in dirs if x not in SKIP_DIRS]
+        out += [os.path.join(d, f) for f in files if is_secret(f)]
+    return sorted(out)
 
 
 def check_command(check_one, part):
@@ -229,6 +222,17 @@ def fix_prompt(base, check):
            if base == 'tester' else 'Fix the real cause, only in the files your task names.')
     return (f"The Lead's script ran the check on your part: {check_text(check)}\n\nOutput (last lines):\n```\n{check['output']}\n```\n\n"
             f'{who} Run no commands: the check runs again after you. End with the report.')
+
+
+def retry_wait(error):
+    """Seconds to wait before retrying a busy worker: what its error asks for (Retry-After, retryDelay,
+    "retry in 17s"), else 20. None = it asks for more than MAX_RETRY_WAIT: don't retry, try the next worker."""
+    m = re.search(r'retry[ _-]?after\W{0,4}(\d+(?:\.\d+)?)|retryDelay\W{0,4}(\d+(?:\.\d+)?)s|'
+                  r'(?:retry|try again) in (\d+(?:\.\d+)?)\s*s', str(error or ''), re.I)
+    if not m:
+        return 20
+    wait = float(next(g for g in m.groups() if g))
+    return None if wait > MAX_RETRY_WAIT else int(wait + 0.999) + 1
 
 
 def build_prompt(task, base, role, role_body, rules, proj, notes, includes, conversation, check=None):
@@ -295,10 +299,9 @@ def in_scope(line, patterns):
 
 
 def split_scope(lines, patterns):
-    """(own changes, changes outside --files). Without --files everything counts as own."""
-    if not patterns:
-        return lines, []
-    return [l for l in lines if in_scope(l, patterns)], [l for l in lines if not in_scope(l, patterns)]
+    """(own changes, changes outside --files). Without --files everything counts as own; a secret file never does."""
+    own = [l for l in lines if (not patterns or in_scope(l, patterns)) and not is_secret(l[3:])]
+    return own, [l for l in lines if l not in own]
 
 
 def kill_tree(proc):
@@ -369,36 +372,6 @@ def _run(cmd, *, shell=False, stdin_bytes=None, env=None, timeout=None, watch=No
     return text, why, proc.returncode
 
 
-def direct_mode(base, a):
-    """Can this task run as ONE plain API call, without a harness? (API workers only; agy always uses its CLI.)
-    Reviewer: when the files it must judge are pasted in with --include.
-    Scribe: when --files names exactly one .md file that is new or pasted in with --include."""
-    if a.no_direct or a.conversation:
-        return False
-    if base == 'reviewer':
-        return bool(a.include)
-    if base == 'scribe' and len(a.files) == 1 and a.files[0].endswith('.md') and not re.search(r'[*?\[]', a.files[0]):
-        target = (ROOT / a.files[0]).resolve()
-        return not target.exists() or any((ROOT / f).resolve() == target for f in a.include)
-    return False
-
-
-def direct_note(base, a):
-    if base == 'scribe':
-        return (f"\n\nNOTE: you have no tools. Reply with the COMPLETE new contents of `{a.files[0]}` between a line that says "
-                "only BEGIN FILE and a line that says only END FILE. After that, the report.")
-    return '\n\nNOTE: you have no tools. Everything you need is above. Answer directly.'
-
-
-def extract_file(reply):
-    """A 'BEGIN FILE' line ... an 'END FILE' line -> (file contents, the rest of the reply), or (None, reply).
-    Small models decorate the marker lines (=====, <<< >>>, **): anything that is not a letter or digit is ignored there."""
-    m = re.search(r'^[\W_]*BEGIN FILE[\W_]*\r?\n(.*?)\r?\n?^[\W_]*END FILE[\W_]*$', reply or '', re.S | re.M)
-    if not m:
-        return None, reply
-    return m.group(1) + '\n', (reply[:m.start()] + reply[m.end():]).strip()
-
-
 def diff_stat(root, lines):
     """' M a.py' -> ' M a.py (+3 -1)': how big each change is, so the Lead knows what to read."""
     out = []
@@ -454,6 +427,11 @@ def parse_agy_stream(stream, model):
     return o
 
 
+def agy_settings(secrets):
+    """Session-only agy settings: deny reading and writing each secret file (agy rules take exact paths, no globs)."""
+    return {'permissions': {'deny': [f'{action}({p})' for p in secrets for action in ('read_file', 'write_file')]}}
+
+
 def invoke_agy(w, ctx):
     a = ctx.args
     prompt = ctx.task
@@ -469,74 +447,64 @@ def invoke_agy(w, ctx):
         cmd += ['--conversation', a.conversation]
     if a.schema:
         cmd += ['--json-schema', str(Path(a.schema).resolve())]
+    settings = None
+    if ctx.secrets:
+        settings = Path(tempfile.gettempdir()) / f'agy-settings-{uuid.uuid4().hex[:8]}.json'
+        settings.write_text(json.dumps(agy_settings(ctx.secrets)), encoding='utf-8')
+        cmd += ['--settings', str(settings)]
     # Prompt via stdin: one NDJSON message (no argv length limit, no quote escaping).
     line = json.dumps({'event': 'user', 'message': {'content': prompt}}) + '\n'
-    # agy stops itself at --print-timeout; the extra minute only catches a hung process.
-    stream, why = run_tool(cmd, stdin_bytes=line.encode('utf-8'), timeout=a.timeout_sec + 60)
+    try:
+        # agy stops itself at --print-timeout; the extra minute only catches a hung process.
+        stream, why = run_tool(cmd, stdin_bytes=line.encode('utf-8'), timeout=a.timeout_sec + 60)
+    finally:
+        if settings:
+            settings.unlink(missing_ok=True)
     o = parse_agy_stream(stream, w['m'])
     if why == 'timeout':
         o['code'] = 3
     return o
 
 
-# --- Copilot + cloud API ----------------------------------------------------------------------
-class LogTokens:
-    """Copilot writes token counts only to its debug log (also while running). read() reads only what is new
-    since the last read, up to the last full line (the log can be many MB; the cap checks it every 3 s)."""
-
-    def __init__(self, log_dir):
-        self.log_dir, self.pos = str(log_dir), {}
-        self.r = {'in': 0, 'out': 0, 'cached': 0, 'calls': 0}
-        self.last_in = self.last_out = 0
-
-    def read(self, final=False):
-        r = self.r
-        for f in sorted(glob.glob(os.path.join(self.log_dir, '*.log'))):
-            try:
-                with open(f, 'rb') as fh:
-                    fh.seek(self.pos.get(f, 0))
-                    data = fh.read()
-            except OSError:
-                continue
-            cut = len(data) if final else data.rfind(b'\n') + 1
-            self.pos[f] = self.pos.get(f, 0) + cut
-            text = data[:cut].decode('utf-8', errors='replace')
-            for v in re.findall(r'"prompt_tokens": (\d+)', text):
-                self.last_in = int(v)
-                r['in'] += self.last_in
-                r['calls'] += 1
-            for v in re.findall(r'"completion_tokens": (\d+)', text):
-                self.last_out = int(v)
-                r['out'] += self.last_out
-            r['cached'] += sum(int(v) for v in re.findall(r'"cached_tokens": (\d+)', text))
-        return dict(r, last=self.last_in + self.last_out, total=r['in'] + r['out'])   # last = size of the latest call
+# --- Codex ---------------------------------------------------------------------------------------
+def toml_inline(v):
+    """dict/str/int -> a TOML inline value (JSON string escapes are valid TOML)."""
+    if isinstance(v, dict):
+        return '{' + ', '.join(f'{json.dumps(k, ensure_ascii=False)}={toml_inline(x)}' for k, x in v.items()) + '}'
+    return json.dumps(v, ensure_ascii=False)
 
 
-def log_tokens(log_dir):
-    return LogTokens(log_dir).read(final=True)
+def codex_profile(base, secrets):
+    """The worker's Codex permission profile: workspace (reviewer: read-only), secrets denied by pattern and by path."""
+    roots = {'.': 'read' if base == 'reviewer' else 'write'}
+    roots.update({g: 'deny' for g in SECRET_GLOBS})
+    fs = {'glob_scan_max_depth': 8, ':workspace_roots': roots}
+    fs.update({p: 'deny' for p in secrets})
+    return {'extends': ':read-only' if base == 'reviewer' else ':workspace', 'filesystem': fs}
 
 
-def openai_tier(model):
-    for t in ('big', 'mini'):
-        if model in OPENAI_FREE[t]['models']:
-            return t
-    return None
+def codex_cmd(w, ctx):
+    """codex exec (or exec resume) with no shell, no web, no subagents, no user config (plugins, MCP, hooks), no approvals.
+    The prompt goes in on stdin ('-')."""
+    a = ctx.args
+    cmd = ['codex', 'exec'] + (['resume'] if a.conversation else [])
+    cmd += ['--json', '--ignore-user-config', '--ignore-rules', '-m', w['m']]
+    for feature in ('shell_tool', 'multi_agent', 'apps', 'plugins', 'hooks', 'image_generation', 'goals', 'memories'):
+        cmd += ['--disable', feature]
+    cmd += ['-c', 'web_search="disabled"', '-c', 'approval_policy="never"',
+            '-c', 'default_permissions="worker"', '-c', 'permissions.worker=' + toml_inline(codex_profile(ctx.base, ctx.secrets))]
+    if w.get('e'):
+        cmd += ['-c', f'model_reasoning_effort="{w["e"]}"']
+    if a.schema:
+        cmd += ['--output-schema', str(Path(a.schema).resolve())]
+    if a.conversation:
+        cmd += [a.conversation]
+    return cmd + ['-']
 
 
-def openai_used_today(log_file, tier):
-    day, total = utc_day(), 0
-    if Path(log_file).exists():
-        for line in read_text(log_file).splitlines():
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            if e.get('day') == day and e.get('tier') == tier:
-                total += int(e.get('tokens') or 0)
-    return total
-
-
-def parse_copilot_events(text):
+def parse_codex_events(text, model, effort=''):
+    """codex exec --json: thread.started, item.completed (agent_message, command_execution, file_change), turn.completed
+    (usage), turn.failed / error."""
     ev = []
     for line in text.splitlines():
         try:
@@ -545,156 +513,53 @@ def parse_copilot_events(text):
             continue
         if isinstance(e, dict):
             ev.append(e)
-    final = next((e for e in reversed(ev) if e.get('type') == 'result'), {})
-    err = next((e for e in reversed(ev) if e.get('type') == 'session.error'), None)
-    starts = {(e.get('data') or {}).get('toolCallId'): e.get('data') or {} for e in ev if e.get('type') == 'tool.execution_start'}
-    denied = []
+    thread = next((e.get('thread_id') for e in ev if e.get('type') == 'thread.started'), None)
+    items = {}
     for e in ev:
-        d = e.get('data') or {}
-        if e.get('type') == 'tool.execution_complete' and ((d.get('error') or {}).get('code')) == 'denied':
-            s = starts.get(d.get('toolCallId'), {})
-            args = s.get('arguments') or {}
-            denied.append(f"{s.get('toolName')}: {args.get('command') or ''}{args.get('path') or ''}")
-    msgs = [e for e in ev if e.get('type') == 'assistant.message' and (e.get('data') or {}).get('content')]
-    return {
-        'conversation_id': final.get('sessionId'),
-        'response': msgs[-1]['data']['content'] if msgs else None,
-        'error': str(((err or {}).get('data') or {}).get('message') or ''),
-        'calls': sum(1 for e in ev if e.get('type') == 'model.call_start'),
-        'denied': denied,
-    }
-
-
-def provider_setup(w, ctx):
-    """-> (provider, model, key, openai guard, refusal result or None)."""
-    pv = PROVIDERS.get(w['p'])
-    if not pv:
-        raise Fail(f"Unknown provider '{w['p']}' (agent/models.json has: {', '.join(PROVIDERS)}).", 2)
-    model = pv['model'] if not w['pm'] or w['pm'] == 'free' else w['pm']
-    guard = None
-    if w['p'] == 'openai':
-        tier = openai_tier(model)
-        refused = lambda why: (pv, model, None, None, {'worker': f'openai {model}', 'code': 6, 'calls': 0, 'denied': [], 'error': why})
-        if not tier:
-            return refused(f'REFUSED: {model} is not on the free list (would bill the prepaid credit). See agent/models.json.')
-        used, limit = openai_used_today(ctx.openai_log, tier), OPENAI_FREE[tier]['limit']
-        if used >= 0.9 * limit:
-            return refused(f'REFUSED: OpenAI {tier} free tier at {used} of {limit} tokens today (stop at 90%; capacity).')
-        guard = {'tier': tier, 'used': used, 'limit': limit}
-    key = os.environ.get(pv['key']) or windows_user_env(pv['key'])
-    if not key:
-        raise Fail(f"Put {pv['key']}=... in .env (see .env.example).", 3)
-    return pv, model, key, guard, None
-
-
-def openai_log_usage(ctx, guard, model, tokens):   # count free-tier usage per UTC day
-    with open(ctx.openai_log, 'a', encoding='utf-8') as f:
-        f.write(json.dumps({'day': utc_day(), 'tier': guard['tier'], 'model': model, 'tokens': tokens}) + '\n')
-
-
-def invoke_direct(w, ctx):
-    """One plain chat-completions call: no harness, no tools, no resent history."""
-    pv, model, key, guard, refusal = provider_setup(w, ctx)
-    if refusal:
-        return refusal
-    o = {'worker': f"{w['p']} {model} (no tools)", 'conversation_id': None, 'response': None, 'error': '', 'calls': 1,
-         'input_tokens': None, 'cache_read_tokens': None, 'output_tokens': None, 'thinking_tokens': 0, 'denied': [], 'code': 0}
-    req = urllib.request.Request(pv['url'].rstrip('/') + '/chat/completions', method='POST',
-                                 data=json.dumps({'model': model, 'messages': [{'role': 'user', 'content': ctx.task}]}).encode('utf-8'),
-                                 headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'})
-    try:
-        with urllib.request.urlopen(req, timeout=ctx.args.timeout_sec) as r:
-            data = json.loads(r.read().decode('utf-8', errors='replace'))
-        o['response'] = (((data.get('choices') or [{}])[0].get('message') or {}).get('content') or '').strip() or None
-        u = data.get('usage') or {}
-        o['input_tokens'], o['output_tokens'] = u.get('prompt_tokens'), u.get('completion_tokens')
-        if not o['response']:
-            o['code'] = 5
-    except urllib.error.HTTPError as e:
-        after = e.headers.get('Retry-After') if e.headers else None
-        o['code'], o['error'] = 6, (f'{e.code} ' + (f'retry-after {after} ' if after else '')
-                                    + e.read().decode('utf-8', errors='replace')[:300])
-    except (TimeoutError, OSError, ValueError) as e:   # URLError is an OSError
-        timed_out = 'timed out' in str(e).lower()
-        o['code'], o['error'] = (3 if timed_out else 6), f'{type(e).__name__}: {e}'
-    if guard:
-        openai_log_usage(ctx, guard, model, (o['input_tokens'] or 0) + (o['output_tokens'] or 0))
-    if o['code'] == 0 and ctx.base == 'scribe':   # the script writes the one file the scribe was asked for
-        content, rest = extract_file(o['response'])
-        if content is None:
-            o['code'], o['error'] = 5, 'no BEGIN FILE ... END FILE block in the reply: nothing written'
-        else:
-            (ROOT / ctx.args.files[0]).write_text(content, encoding='utf-8')
-            o['response'] = rest or 'Changed: ' + ctx.args.files[0]
+        it = e.get('item') or {}
+        if e.get('type', '').startswith('item.') and it.get('id'):
+            items[it['id']] = it
+    msgs = [it.get('text') for it in items.values() if it.get('type') == 'agent_message' and it.get('text')]
+    ran = [str(it.get('command') or '?') for it in items.values() if it.get('type') == 'command_execution']
+    usage = {}
+    for e in ev:
+        if e.get('type') == 'turn.completed':
+            for k, v in (e.get('usage') or {}).items():
+                if isinstance(v, int):
+                    usage[k] = usage.get(k, 0) + v
+    errs = [str((e.get('error') or {}).get('message') or e.get('message') or '') for e in ev if e.get('type') in ('turn.failed', 'error')]
+    err = '; '.join(x for x in errs if x)
+    if not ev:
+        err = ' '.join(text.strip().splitlines()[-3:])
+    o = {'worker': f'codex {model}' + (f' ({effort})' if effort else ''), 'conversation_id': thread,
+         'response': msgs[-1] if msgs else None, 'error': err, 'calls': '?',
+         'input_tokens': usage.get('input_tokens'), 'cache_read_tokens': usage.get('cached_input_tokens'),
+         'output_tokens': usage.get('output_tokens'), 'thinking_tokens': usage.get('reasoning_output_tokens'),
+         'denied': [f'RAN A COMMAND (the shell should be off): {c}' for c in ran]}
+    if not ev or (errs and not any(e.get('type') == 'turn.completed' for e in ev)):
+        o['code'] = 6
+    elif o['denied']:
+        o['code'] = 4
+    elif not msgs:
+        o['code'] = 5
+    else:
+        o['code'] = 0
     return o
 
 
-def invoke_copilot(w, ctx):
+def invoke_codex(w, ctx):
     a = ctx.args
-    pv, model, key, guard, refusal = provider_setup(w, ctx)
-    if refusal:
-        return refusal
-    if not shutil.which('copilot'):
-        raise Fail('copilot not found on PATH.', 3)
-    # Only the worker's environment: the user's own copilot setup is untouched.
-    env = dict(os.environ)
-    for k in ('COPILOT_PROVIDER_BEARER_TOKEN', 'COPILOT_PROVIDER_WIRE_MODEL', 'COPILOT_PROVIDER_MODEL_ID', 'COPILOT_PROVIDER_WIRE_API'):
-        env.pop(k, None)
-    env.update({'COPILOT_PROVIDER_BASE_URL': pv['url'], 'COPILOT_PROVIDER_TYPE': 'openai', 'COPILOT_PROVIDER_API_KEY': key,
-                'COPILOT_MODEL': model, 'COPILOT_PROVIDER_MAX_PROMPT_TOKENS': '128000'})
-    if w['p'] == 'openai':
-        env['COPILOT_PROVIDER_WIRE_API'] = 'responses' if re.match(r'^(gpt-5|o\d)', model) else 'completions'
-
-    tools = copilot_tools(ctx.base, ctx.proj['check_dir'])
-    log_dir = Path(tempfile.gettempdir()) / f'cp-log-{uuid.uuid4()}'
-    # Prompt via stdin (Windows limits a command line to ~32k characters).
-    cmd = ['copilot', '--output-format', 'json', '--no-color', '--no-ask-user', '--no-custom-instructions',
-           '--disable-builtin-mcps', '--disable-mcp-server', 'ddg-search',
-           '--secret-env-vars', 'COPILOT_PROVIDER_API_KEY,OPENROUTER_API_KEY,NVIDIA_API_KEY,GEMINI_API_KEY,OPENAI_API_KEY',
-           f"--available-tools={tools['tools']}", '--allow-tool', 'read', '--deny-tool', 'shell(git:*)', '--deny-tool', 'url',
-           '--deny-tool', 'read(.env)', '--deny-tool', 'write(.env)',   # keys never reach a cloud model
-           '--log-level', 'debug', '--log-dir', str(log_dir)]
-    for x in tools['allow']:
-        cmd += ['--allow-tool', x]
-    if not a.no_sandbox:
-        cmd += ['--sandbox']
-    if a.conversation:
-        cmd += ['--resume', a.conversation]
-
-    # Caps DURING the run. Every provider: max model calls (a looping worker burns a daily quota).
-    # OpenAI too: what is left below 90% of today's free tier, and at most OPENAI_RUN_CAP per run
-    # (a looping worker once used 1.4M tokens in one run).
-    cap = 0
-    if guard:
-        run_cap = int(os.environ.get('DELEGATE_OPENAI_RUN_CAP') or OPENAI_RUN_CAP[guard['tier']])   # env: for testing
-        cap = min(int(0.9 * guard['limit']) - guard['used'], run_cap)
-    stopped = []
-    calls_left = getattr(ctx, 'calls_left', None) or a.max_calls   # a fix round only gets what the first run left
-
-    log = LogTokens(log_dir)
-
-    def over_cap():   # tokens: look one call ahead, calls only grow (history is resent)
-        lt = log.read()
-        if cap > 0 and lt['total'] + lt['last'] >= cap:
-            stopped.append(f'STOPPED: OpenAI token cap {cap} reached during the run (free-tier guard).')
-        elif calls_left and lt['calls'] >= calls_left:
-            stopped.append(f'STOPPED: the run reached its cap of {a.max_calls} model calls (loop guard; --max-calls or agent/models.json).')
-        return bool(stopped)
-
-    text, why = run_tool(cmd, stdin_bytes=ctx.task.encode('utf-8'), env=env, timeout=a.timeout_sec, watch=over_cap)
-    p = parse_copilot_events(text)
-    tok = log.read(final=True)
-    shutil.rmtree(log_dir, ignore_errors=True)
-    o = {'worker': f"{w['p']} {model}", 'conversation_id': p['conversation_id'], 'response': p['response'], 'error': p['error'],
-         'calls': p['calls'], 'input_tokens': tok['in'], 'cache_read_tokens': tok['cached'], 'output_tokens': tok['out'],
-         'thinking_tokens': 0, 'denied': p['denied']}
-    if why == 'stopped':
-        o['error'] = stopped[0]
-    o['code'] = (3 if why == 'timeout' else 6 if why == 'stopped' or p['error'] else 4 if p['denied']
-                 else 5 if not p['response'] else 0)
-    if guard:
-        openai_log_usage(ctx, guard, model, tok['in'] + tok['out'])
+    prompt = ctx.task
+    if ctx.base in ('builder', 'tester'):
+        prompt += '\n\nREMINDER: you have no shell; edit files with your file tools only. End with the report.'
+    text, why = run_tool(codex_cmd(w, ctx), stdin_bytes=prompt.encode('utf-8'), timeout=a.timeout_sec)
+    o = parse_codex_events(text, w['m'], w.get('e'))
+    if why == 'timeout':
+        o['code'] = 3
     return o
+
+
+INVOKE = {'agy': invoke_agy, 'codex': invoke_codex}
 
 
 # --- Main ------------------------------------------------------------------------------------------
@@ -708,28 +573,37 @@ def parse_args(argv):
     ap.add_argument('--task-file', help='file with the task')
     ap.add_argument('--role', default='builder', help='any agent/roles/<name>.md (default builder)')
     ap.add_argument('--include', nargs='+', default=[], metavar='FILE',
-                    help='files appended to the prompt (saves exploring calls); a reviewer gets line numbers')
+                    help='project files appended to the prompt (saves exploring calls); a reviewer gets line numbers')
     ap.add_argument('--model', choices=AGY_MODELS, help='force one agy worker (no chain, no fallback)')
-    ap.add_argument('--provider', choices=list(PROVIDERS), help='force one Copilot+API worker')
-    ap.add_argument('--provider-model', help='model id for --provider')
-    ap.add_argument('--openrouter', metavar='ID', help='shortcut: --provider openrouter --provider-model ID')
+    ap.add_argument('--worker', metavar='SPEC', help='force one worker: agy:<model> or codex:<model>[:<effort>]')
+    ap.add_argument('--after', metavar='RUN',
+                    help='tester/reviewer: the builder run this checks (its id from "saved:", or its run file), or "lead"')
     ap.add_argument('--conversation', help='follow-up on an earlier result (max 2)')
-    ap.add_argument('--schema', help='agy: JSON schema file for the final result')
+    ap.add_argument('--schema', help='JSON schema file for the final result')
     ap.add_argument('--files', nargs='+', default=[], metavar='FILE',
                     help='the files (or globs) this task may change; other changes are listed apart')
     ap.add_argument('--part', metavar='NAME', help='the part this task is about: fills {name} in check_one')
     ap.add_argument('--no-check', action='store_true', help='do not run check_one for this task')
     ap.add_argument('--fix-rounds', type=int, choices=(0, 1, 2), default=2,
                     help='how often a failing check goes back to the worker (default 2; round 2 only if round 1 changed the failure)')
-    ap.add_argument('--no-direct', action='store_true',
-                    help='reviewer/scribe on an API model: use the Copilot harness even when one plain API call would do')
-    ap.add_argument('--max-calls', type=int, default=MAX_CALLS, help=f'Copilot workers: stop after this many model calls (default {MAX_CALLS})')
     ap.add_argument('--check-timeout-sec', type=int, default=300)
     ap.add_argument('--timeout-sec', type=int, default=480)
-    ap.add_argument('--no-sandbox', action='store_true', help='only if the check must write outside this folder')
+    ap.add_argument('--no-sandbox', action='store_true', help='agy: no terminal sandbox (workers run no commands anyway)')
     ap.add_argument('--no-agent', action='store_true', help='agy: full default tool set (debugging only)')
     ap.add_argument('--json', action='store_true', help='print the full JSON instead of the summary')
     return ap.parse_args(argv)
+
+
+def builder_family(after):
+    """--after <run id | run file | lead> -> the family of the model that made the work ('' for the Lead)."""
+    if after.strip().lower() == 'lead':
+        return ''
+    m = re.fullmatch(r'(?:.*[\\/])?(?:run-)?([0-9a-f]{8})(?:\.json)?', after.strip())
+    f = ROOT / '.worker' / f'run-{m.group(1)}.json' if m else None
+    if not f or not f.exists():
+        raise Fail(f"--after '{after}': no such run in .worker/ (give the id from the builder's 'saved:' line, or 'lead').", 2)
+    run = json.loads(read_text(f))
+    return run.get('family') or family(str(run.get('model') or ''))
 
 
 def main(argv=None):
@@ -741,7 +615,6 @@ def main(argv=None):
     a = parse_args(argv)
     os.chdir(ROOT)
     (ROOT / '.worker').mkdir(exist_ok=True)   # git-ignored, so missing in a fresh clone
-    load_env(ROOT)
 
     proj, notes, private = {'check_one': '', 'check_all': '', 'check_dir': '', 'private': ''}, '', True
     if (ROOT / 'PROJECT.md').exists():
@@ -758,23 +631,40 @@ def main(argv=None):
     if base not in BASES:
         raise Fail(f"Role '{a.role}': base must be builder, tester, reviewer or scribe (got '{base}').", 2)
     model_list = fm.get('models') or DEFAULT_MODELS[base]
+    a.include = [project_path(f, '--include') for f in a.include]
+    for f in a.include:   # --include pastes text; an image or other binary file is named in the task instead
+        try:
+            with open(ROOT / f, 'rb') as fh:
+                if b'\0' in fh.read(8192):
+                    raise Fail(f"--include '{f}': not a text file. Name it in the task; the worker opens it with its own tools.", 2)
+        except OSError:
+            raise Fail(f"--include '{f}': no such file.", 2)
+    a.files = [project_path(f, '--files') for f in a.files]
+
+    # Independence: a tester/reviewer never runs on the model family of the work it checks.
+    avoid = ''
+    if base in ('tester', 'reviewer') and not a.conversation:
+        if not a.after:
+            raise Fail(f"Role '{a.role}' checks someone's work: give --after <builder run id> (from its 'saved:' line), "
+                       "or --after lead when you made it yourself.", 2)
+        avoid = builder_family(a.after)
 
     available = parse_available(read_text(ROOT / 'SETUP.md')) if (ROOT / 'SETUP.md').exists() else None
-    if private and (a.provider or a.openrouter):
-        raise Fail('This project is private (PROJECT.md): cloud API workers are not allowed. Use agy (--model) '
-                   'or do it yourself. To allow free cloud workers, set "private: no" in the settings block of PROJECT.md.', 6)
-    if a.openrouter:
-        a.provider = 'openrouter'
-        a.provider_model = a.provider_model or a.openrouter
-    if a.model:
-        chain = [{'h': 'agy', 'm': a.model}]   # forced: no availability filter, no fallback
-    elif a.provider:
-        chain = [{'h': 'cp', 'p': a.provider, 'pm': a.provider_model or ''}]
+    forced = [{'h': 'agy', 'm': a.model, 'e': ''}] if a.model else [to_worker(a.worker)] if a.worker else None
+    if forced:   # forced: no availability filter, no fallback
+        chain = forced
+        if private and chain[0]['h'] not in PRIVATE_OK:
+            raise Fail(f"This project is private (PROJECT.md): only {', '.join(PRIVATE_OK)} workers may run.", 6)
+        if avoid and family(chain[0]['m']) == avoid:
+            raise Fail(f"{worker_name(chain[0])} is the same model family ({avoid}) as the work it must check. Pick another.", 2)
     else:
-        chain = [w for w in parse_chain(model_list) if is_available(w, available) and not (private and w['h'] != 'agy')]
+        chain = [w for w in parse_chain(model_list) if is_available(w, available) and not (private and w['h'] not in PRIVATE_OK)]
         if not chain:
-            raise Fail(f"Role '{a.role}': none of its workers ({model_list}) is available on this machine (SETUP.md). Add one, or do it yourself."
-                       + (' The project is private, so only agy workers count. To allow free cloud workers, set "private: no" in the settings block of PROJECT.md.' if private else ''), 6)
+            raise Fail(f"Role '{a.role}': none of its workers ({model_list}) is available on this machine (SETUP.md). Add one, or do it yourself.", 6)
+        chain = [w for w in chain if not avoid or family(w['m']) != avoid]
+        if not chain:
+            raise Fail(f"Role '{a.role}': every available worker is the {avoid} family, like the work it must check. "
+                       f"Force another with --worker / --model, or do it yourself.", 6)
 
     task = read_text(a.task_file) if a.task_file else a.task
     if not task:
@@ -790,30 +680,17 @@ def main(argv=None):
         check = run_check(check_cmd, a.check_timeout_sec)
     task = build_prompt(task, base, a.role, role_body, rules, proj, notes, a.include, a.conversation, check)
 
-
     ctx = Ctx()
     ctx.args, ctx.task, ctx.base, ctx.proj = a, task, base, proj
-    direct = direct_mode(base, a)   # reviewer/scribe on an API model: one plain call, no harness
+    ctx.secrets = secret_files(ROOT)   # denied to the worker by exact path
 
-    def run_worker(w):
-        if w['h'] == 'agy':
-            return invoke_agy(w, ctx)
-        if not direct:
-            return invoke_copilot(w, ctx)
-        ctx.task = task + direct_note(base, a)
-        try:
-            return invoke_direct(w, ctx)
-        finally:
-            ctx.task = task
-    ctx.openai_log = ROOT / '.worker' / 'openai-usage.jsonl'
-
-    # Run the chain: transient provider error -> retry once -> next worker.
+    # Run the chain: busy/quota error -> retry once if the wait is short -> next worker.
     before = git_snapshot(ROOT)
     start = time.monotonic()
-    tried, res, changed = [], None, False
+    tried, res, changed, w = [], None, False, None
     for w in chain:
         for attempt in (1, 2):
-            res = run_worker(w)
+            res = INVOKE[w['h']](w, ctx)
             tried.append(f"{res['worker']}={res['code']}")
             # With --files, another worker's changes elsewhere don't count as this worker's.
             changed = bool(split_scope(changed_since(before, git_snapshot(ROOT)), a.files)[0])
@@ -834,16 +711,11 @@ def main(argv=None):
                 res['error'] = f'no fix round {rounds + 1}: the check failed the same way after round {rounds}.'
                 break
             last_key = failure_key(check)
-            if isinstance(res.get('calls'), int) and a.max_calls:   # the call cap is for the whole run
-                ctx.calls_left = a.max_calls - res['calls']
-                if ctx.calls_left <= 0:
-                    res['error'] = f'no fix round: the run already used its {a.max_calls} model calls (--max-calls).'
-                    break
             rounds += 1
             a.conversation, ctx.task = res['conversation_id'], fix_prompt(base, check)
-            fix = invoke_agy(w, ctx) if w['h'] == 'agy' else invoke_copilot(w, ctx)
+            fix = INVOKE[w['h']](w, ctx)
             tried.append(f"{fix['worker']}=fix:{fix['code']}")
-            for k in ('calls', 'input_tokens', 'cache_read_tokens', 'output_tokens', 'thinking_tokens'):
+            for k in ('input_tokens', 'cache_read_tokens', 'output_tokens', 'thinking_tokens'):
                 if isinstance(res.get(k), int) and isinstance(fix.get(k), int):
                     res[k] += fix[k]
             res['denied'] = (res.get('denied') or []) + (fix.get('denied') or [])
@@ -862,6 +734,7 @@ def main(argv=None):
     own, outside = split_scope(changed_since(before, git_snapshot(ROOT)), a.files)
     run_file = f'.worker/run-{uuid.uuid4().hex[:8]}.json'   # one per run: parallel workers don't overwrite each other
     res.update({'role': a.role, 'seconds': int(time.monotonic() - start), 'tried': tried, 'run_file': run_file,
+                'model': w['m'], 'family': family(w['m']), 'after': a.after,
                 'files_changed': [c.strip() for c in diff_stat(ROOT, own)],
                 'files_outside': [c.strip() for c in diff_stat(ROOT, outside)]})
     for k in ('conversation_id', 'response', 'error', 'input_tokens', 'cache_read_tokens', 'output_tokens', 'thinking_tokens'):
@@ -874,13 +747,13 @@ def main(argv=None):
         print(json_out)
     else:
         none = lambda v: '' if v is None else v
-        print(f"[{LABELS.get(res['code'], res['code'])}] {a.role} via {res['worker']} | {res['seconds']}s | {res['calls']} calls | "
+        print(f"[{LABELS.get(res['code'], res['code'])}] {a.role} via {res['worker']} | {res['seconds']}s | "
               f"in {none(res['input_tokens'])} (+cache {none(res['cache_read_tokens'])}) out {none(res['output_tokens'])}")
         if len(tried) > 1:
             print('tried: ' + ', '.join(tried))
         print('files: ' + ('; '.join(res['files_changed']) or 'none'))
         if res['files_outside']:
-            print('NOT IN --files (another worker, or this one broke its scope): ' + '; '.join(res['files_outside']))
+            print('NOT IN --files (another worker, this one broke its scope, or a secret file): ' + '; '.join(res['files_outside']))
         if check:
             n = check.get('fix_rounds')
             print('check: ' + check_text(check) + (f" | after {n} fix round{'s' if n > 1 else ''}" if n else ''))
@@ -890,7 +763,7 @@ def main(argv=None):
             print('denied: ' + '; '.join(res['denied']))
         if res['error']:
             print(f"error: {res['error']}")
-        print(f"conversation: {none(res['conversation_id'])} | saved: {run_file}")
+        print(f"conversation: {none(res['conversation_id'])} | saved: {run_file} (run id {run_file[12:20]})")
         print('--- report ---')
         print(str(none(res['response'])).strip())
     return int(res['code'])

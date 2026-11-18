@@ -1,5 +1,6 @@
 ---
 base: reviewer
+models: agy:claude-sonnet-4-6, codex:gpt-6.1-sol:medium
 does: Checks every claim in a draft against the source files.
 ---
 For every factual claim in the draft: quote it, then the source text that supports it.

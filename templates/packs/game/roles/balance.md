@@ -1,5 +1,6 @@
 ---
 base: reviewer
+models: codex:gpt-6-astra:high, agy:claude-sonnet-4-6
 does: Reviews game numbers (difficulty, economy, pacing) against the design.
 ---
 Look only at numbers and formulas. For each item: quote, YES/NO, 1 sentence. Show a small worked example where it helps.
