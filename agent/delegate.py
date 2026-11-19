@@ -491,6 +491,8 @@ def codex_cmd(w, ctx):
     cmd += ['--json', '--ignore-user-config', '--ignore-rules', '-m', w['m']]
     for feature in ('shell_tool', 'multi_agent', 'apps', 'plugins', 'hooks', 'image_generation', 'goals', 'memories'):
         cmd += ['--disable', feature]
+    if IS_WIN:  # the unelevated Windows sandbox cannot enforce the deny-read rules (and --ignore-user-config hides config.toml)
+        cmd += ['-c', 'windows.sandbox="elevated"']
     cmd += ['-c', 'web_search="disabled"', '-c', 'approval_policy="never"',
             '-c', 'default_permissions="worker"', '-c', 'permissions.worker=' + toml_inline(codex_profile(ctx.base, ctx.secrets))]
     if w.get('e'):

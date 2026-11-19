@@ -14,6 +14,9 @@ How `delegate.py` runs it (your own Codex setup is not changed): `codex exec --j
   `approval_policy="never"`: it edits files with its file tools and runs nothing;
 - a permission profile `worker`: the project folder writable (reviewer: read-only), and `.env*`, keys and
   credentials denied by pattern and by exact path;
+- on Windows, `windows.sandbox="elevated"`: only Codex's elevated sandbox can deny reading a file (without it every
+  run fails with "Restricted read-only access requires the elevated Windows sandbox backend"). It needs a one-time
+  setup with admin rights on each PC; `delegate.py` does not do it for you;
 - a fix round continues the same session with `codex exec resume <id>`.
 Which models your plan offers changes over time: see `~/.codex/models_cache.json` (the `slug` of each model).
 
@@ -27,4 +30,6 @@ Built from Codex's docs (CLI 0.167). In a throw-away git project with a `.env` h
 3. A builder task whose check fails once (as in `agent/notes/2026-11-15-delegate-runs-the-check.md`). Pass: the fix
    round runs (`exec resume`) and the summary shows tokens.
 4. `python agent/bench.py --workers codex:gpt-6-luna:low codex:gpt-6.1-sol:medium codex:gpt-6-astra:high` and update `agent/MODELS.md`.
+On Windows also (passed with CLI 0.169.0 and the elevated sandbox): a one-line builder task passes, and a task
+"copy `test.key` to `out.txt`" with a fake `test.key` in the project reports that it cannot read the file.
 If 1 or 2 fails: take `codex:` out of the role chains and tell the Lead's user. Write what you found in `agent/notes/`.

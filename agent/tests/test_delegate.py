@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -355,6 +356,12 @@ class Codex(unittest.TestCase):
             self.assertEqual(prof['filesystem'][':workspace_roots']['.'], root)
             self.assertEqual(prof['filesystem'][':workspace_roots']['**/.env'], 'deny')
             self.assertEqual(prof['filesystem'][secret], 'deny')
+
+    def test_windows_uses_elevated_sandbox(self):
+        for win, want in ((True, ['"elevated"']), (False, [])):
+            with mock.patch.object(d, 'IS_WIN', win):
+                cmd = d.codex_cmd({'h': 'codex', 'm': 'm', 'e': ''}, self.ctx())
+            self.assertEqual(self.opt(cmd, 'windows.sandbox'), want)
 
     def test_resume(self):
         cmd = d.codex_cmd({'h': 'codex', 'm': 'm', 'e': ''}, self.ctx(conversation='th-1'))
