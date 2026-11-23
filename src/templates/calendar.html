@@ -7,13 +7,16 @@
 {% endblock %}
 
 {% block content %}
-<div class="month-navigation">
-  <a class="nav-arrow" href="{{ url_for('calendar_page', work_month=prev_month) }}" aria-label="Previous month">{{ icon('prev') }}</a>
-  <div class="month-title">
+<div class="gcal-head">
+  <a class="gcal-today{% if today_month == work_month %} is-current{% endif %}" href="{{ url_for('calendar_page', work_month=today_month) }}">Today</a>
+  <div class="gcal-arrows">
+    <a class="gcal-arrow" href="{{ url_for('calendar_page', work_month=prev_month) }}" aria-label="Previous month">{{ icon('prev') }}</a>
+    <a class="gcal-arrow" href="{{ url_for('calendar_page', work_month=next_month) }}" aria-label="Next month">{{ icon('next') }}</a>
+  </div>
+  <div class="gcal-title">
     <h1>{{ label }}</h1>
     <div class="month-sub">Paid in <time datetime="{{ pay_month }}">{{ pay_month | month_label }}</time></div>
   </div>
-  <a class="nav-arrow" href="{{ url_for('calendar_page', work_month=next_month) }}" aria-label="Next month">{{ icon('next') }}</a>
 </div>
 
 {% if legacy_note %}<p class="notice">{{ legacy_note }}</p>{% endif %}
@@ -22,21 +25,23 @@
 
 <div class="cal-toolbar">
   <div id="presets" class="presets" role="toolbar" aria-label="Day tools"></div>
-  <p class="cal-hint">Pick a tool, then tap the days you worked. You can also drag a tool onto a day.</p>
+  <p class="cal-hint">Pick a tool, then tap the days you worked, or drag a tool onto a day. Tap a day's hours (or any day with no tool picked) to set custom hours for that day.</p>
 </div>
 
+<div class="cal-layout">
 <section class="card cal-card">
   <div id="calendar" class="cal-grid" role="grid"></div>
   <div class="cal-legend" aria-hidden="true">
     <span><i class="lg-worked"></i>Worked</span>
-    <span><i class="lg-holiday"></i>Holiday</span>
-    <span><i class="lg-sunday"></i>Sunday</span>
+    <span><i class="lg-holiday"></i>Paid holiday</span>
+    <span><i class="lg-public"></i>Public holiday</span>
     <span><i class="lg-today"></i>Today</span>
   </div>
 </section>
 
 <div id="status" class="cal-status" role="status" aria-live="polite"></div>
-<section class="card" id="summary"></section>
+<section class="card cal-summary" id="summary"></section>
+</div>
 
 <noscript><p class="error">The calendar needs JavaScript.</p></noscript>
 

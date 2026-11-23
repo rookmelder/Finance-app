@@ -112,10 +112,36 @@ def _render_income(conn, error=None, status_code=200):
     default_wm = calc.default_work_month(datetime.date.today())
     first = min([calc.add_months(default_wm, -2), *by_work_month])
     months = []
+    today_iso = datetime.date.today().isoformat()
+    holidays_by_year = {}
     for wm in calc.month_range(first, calc.add_months(default_wm, 6)):
         row = by_work_month.get(wm)
         year, mon = int(wm[:4]), int(wm[5:7])
+        if year not in holidays_by_year:
+            holidays_by_year[year] = calc.belgian_holidays(year)
+        worked = {d["date"]: d for d in db.list_days(conn, wm)} if row and row["per_day"] else {}
+        weeks = []
+        for week in calendar.Calendar(firstweekday=0).monthdayscalendar(year, mon):
+            cells = []
+            for i, day in enumerate(week):
+                if day == 0:
+                    cells.append(None)
+                    continue
+                iso = f"{wm}-{day:02d}"
+                entry = worked.get(iso)
+                cells.append({
+                    "day": day,
+                    "date": iso,
+                    "worked": entry is not None,
+                    "paid_holiday": bool(entry and entry["holiday"]),
+                    "public_holiday": holidays_by_year[year].get(iso),
+                    "today": iso == today_iso,
+                    "sunday": i == 6,
+                })
+            weeks.append(cells)
         months.append({
+            "year": year,
+            "weeks": weeks,
             "work_month": wm,
             "pay_month": calc.pay_month(wm),
             "label": f"{calendar.month_name[mon]} {year}",
@@ -524,6 +550,10 @@ def create_app(cfg: dict) -> Flask:
             return False
         return True
 
+    @app.route("/calendar")
+    def calendar_home():
+        return redirect(url_for("calendar_page", work_month=datetime.date.today().strftime("%Y-%m")))
+
     @app.route("/calendar/<work_month>")
     def calendar_page(work_month):
         if not _valid_work_month(work_month):
@@ -547,7 +577,6 @@ def create_app(cfg: dict) -> Flask:
             "entries": db.list_days(conn, work_month) if per_day else [],
             "presets": [
                 {"id": "normal", "label": "Normal day", "minutes": normal, "holiday": False},
-                {"id": "short", "label": "1 hour less", "minutes": max(normal - 60, 1), "holiday": False},
                 {"id": "holiday", "label": "Holiday", "minutes": normal, "holiday": True},
             ],
             "rows": _breakdown_rows(breakdown) if breakdown else [],
@@ -567,6 +596,7 @@ def create_app(cfg: dict) -> Flask:
             label=f"{calendar.month_name[mon]} {year}",
             prev_month=calc.add_months(work_month, -1),
             next_month=calc.add_months(work_month, 1),
+            today_month=datetime.date.today().strftime("%Y-%m"),
             legacy_note=legacy_note,
         )
 

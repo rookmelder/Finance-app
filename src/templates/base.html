@@ -1,8 +1,8 @@
 {%- from "_icons.html" import icon -%}
 {%- set nav_items = [
   ('overview', 'Overview', ('overview',)),
-  ('income', 'Income', ('income', 'income_edit', 'calendar_page')),
-  ('costs', 'Costs', ('costs',)),
+  ('calendar_home', 'Calendar', ('calendar_home', 'income', 'income_edit', 'calendar_page')),
+  ('costs', 'Monthly costs', ('costs',)),
   ('expenses', 'Expenses', ('expenses',)),
   ('settings', 'Settings', ('settings',)),
 ] -%}
@@ -34,7 +34,7 @@
     </div>
   </header>
 
-  <main class="container">
+  <main class="container page-{{ request.endpoint }}">
     {% block content %}{% endblock %}
   </main>
 

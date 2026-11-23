@@ -1,45 +1,53 @@
 {% extends "base.html" %}
 {% from "_icons.html" import icon %}
-{% block title %}Income - Finance{% endblock %}
+{% block title %}Months - Finance{% endblock %}
 {% block content %}
-<div class="page-head">
-  <div>
-    <h1>Income</h1>
-    <p class="page-sub">Pick the month you worked. It's paid the month after.</p>
+<div class="gcal-head">
+  <a class="gcal-today" href="{{ url_for('calendar_home') }}">Today</a>
+  <div class="gcal-title">
+    <h1>Months</h1>
+    <div class="month-sub">Pick the month you worked. It's paid the month after.</div>
   </div>
 </div>
 
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
-<div class="month-list">
-  {% for m in months %}
-  <a class="month-card{% if m.is_default %} month-card-default{% endif %}" href="{{ url_for('calendar_page', work_month=m.work_month) }}"{% if m.is_default %} id="current"{% endif %}>
-    <span class="month-icon"><b>{{ (m.label.split(' ')[0])[:3] }}</b><small>{{ m.work_month[:4] }}</small></span>
-    <span class="month-card-body">
-      <span class="month-card-header">
-        <span class="month-label">{{ m.label }}</span>
-        <span class="month-card-badges">
-          {% if m.is_default %}<span class="badge badge-active">Next up</span>{% endif %}
-          {% if m.has_income and not m.per_day %}<span class="badge badge-inactive">Totals</span>{% endif %}
-        </span>
-      </span>
-      <span class="month-card-sub">Paid in <time datetime="{{ m.pay_month }}">{{ m.pay_month | month_label }}</time></span>
+{% for year, year_months in months | groupby('year') %}
+<h2 class="year-heading">{{ year }}</h2>
+<div class="year-grid">
+  {% for m in year_months %}
+  <a class="mini-month{% if m.is_default %} is-next{% endif %}" href="{{ url_for('calendar_page', work_month=m.work_month) }}"{% if m.is_default %} id="current"{% endif %} aria-label="{{ m.label }}">
+    <span class="mini-head">
+      <span class="mini-name">{{ m.label.split(' ')[0] }}</span>
+      {% if m.is_default %}<span class="badge badge-active">Next up</span>{% endif %}
+      {% if m.has_income and not m.per_day %}<span class="badge badge-inactive">Totals</span>{% endif %}
     </span>
-    {% if m.has_income %}
-    <span class="month-card-stats">
-      <span class="month-card-estimate">{{ m.estimate | money }}</span>
-      {% if m.actual is not none %}
-      <span class="month-card-actual">Actual {{ m.actual | money }}</span>
+    <span class="mini-grid" aria-hidden="true">
+      {% for wd in ['M', 'T', 'W', 'T', 'F', 'S', 'S'] %}<span class="mini-wd">{{ wd }}</span>{% endfor %}
+      {% for week in m.weeks %}{% for c in week %}
+        {% if c %}<span class="mini-day{% if c.worked %} is-worked{% endif %}{% if c.paid_holiday %} is-paid-holiday{% endif %}{% if c.public_holiday %} is-public{% endif %}{% if c.today %} is-today{% endif %}{% if c.sunday %} is-sunday{% endif %}"{% if c.public_holiday %} title="{{ c.public_holiday }}"{% endif %}>{{ c.day }}</span>{% else %}<span class="mini-day is-blank"></span>{% endif %}
+      {% endfor %}{% endfor %}
+    </span>
+    <span class="mini-foot">
+      <span class="mini-paid">Paid in <time datetime="{{ m.pay_month }}">{{ m.pay_month | month_label }}</time></span>
+      {% if m.has_income %}
+      <span class="mini-amount">
+        {% if m.actual is not none %}{{ m.actual | money }} <small>actual</small>{% else %}{{ m.estimate | money }} <small>{{ m.days }} {% if m.days == 1 %}day{% else %}days{% endif %}</small>{% endif %}
+      </span>
       {% else %}
-      <span class="month-card-days">{{ m.days }} {% if m.days == 1 %}day{% else %}days{% endif %}</span>
+      <span class="mini-empty">No days yet</span>
       {% endif %}
     </span>
-    {% else %}
-    <span class="month-card-empty">No days yet</span>
-    {% endif %}
-    <span class="month-card-chevron">{{ icon('chevron', 'icon icon-sm') }}</span>
   </a>
   {% endfor %}
+</div>
+{% endfor %}
+
+<div class="cal-legend mini-legend" aria-hidden="true">
+  <span><i class="lg-worked"></i>Worked</span>
+  <span><i class="lg-holiday"></i>Paid holiday</span>
+  <span><i class="lg-public"></i>Public holiday</span>
+  <span><i class="lg-today"></i>Today</span>
 </div>
 
 <details class="card">

@@ -251,7 +251,7 @@
   // --- Applying Tools ---
   function applyToolToDate(tool, dateStr) {
     if (!tool) {
-      setStatus("Pick a preset first, then tap the days.");
+      openDayEditor(dateStr);
       return;
     }
 
@@ -346,7 +346,8 @@
         btn.appendChild(chipParts(p.label, formatHours(p.minutes) + "h"));
 
         btn.addEventListener("click", () => {
-          state.activeTool = { type: "preset", preset: p };
+          const same = state.activeTool && state.activeTool.type === "preset" && state.activeTool.preset.id === p.id;
+          state.activeTool = same ? null : { type: "preset", preset: p };
           updatePresetsBarActiveStates();
         });
 
@@ -444,7 +445,8 @@
     eraseBtn.appendChild(chipParts("Erase", ""));
 
     eraseBtn.addEventListener("click", () => {
-      state.activeTool = { type: "erase" };
+      const same = state.activeTool && state.activeTool.type === "erase";
+      state.activeTool = same ? null : { type: "erase" };
       updatePresetsBarActiveStates();
     });
 
@@ -463,7 +465,43 @@
     updatePresetsBarActiveStates();
   }
 
-  // --- Calendar Grid ---
+  // --- Calendar Grid (Google Calendar style month view) ---
+  function pad2(n) {
+    return String(n).padStart(2, "0");
+  }
+
+  // Greyed-out day from the previous or next month: shown for context, not clickable.
+  function outsideCell(dayNum, weekdayIdx) {
+    const cell = document.createElement("div");
+    cell.className = "cal-day is-outside" + (weekdayIdx >= 5 ? " is-weekend" : "");
+    cell.setAttribute("aria-hidden", "true");
+    const top = document.createElement("div");
+    top.className = "cal-day-top";
+    const num = document.createElement("span");
+    num.className = "cal-day-num";
+    num.textContent = String(dayNum);
+    top.appendChild(num);
+    cell.appendChild(top);
+    return cell;
+  }
+
+  function makeChip(className, mainText, subText, title) {
+    const chip = document.createElement("div");
+    chip.className = "cal-chip " + className;
+    if (title) chip.title = title;
+    const main = document.createElement("span");
+    main.className = "cal-chip-main";
+    main.textContent = mainText;
+    chip.appendChild(main);
+    if (subText) {
+      const sub = document.createElement("span");
+      sub.className = "cal-chip-sub";
+      sub.textContent = subText;
+      chip.appendChild(sub);
+    }
+    return chip;
+  }
+
   function renderCalendarGrid() {
     if (!calendarContainer) return;
     clearEl(calendarContainer);
@@ -476,25 +514,21 @@
       calendarContainer.appendChild(th);
     }
 
+    const year = Number(cal.work_month.slice(0, 4));
+    const month = Number(cal.work_month.slice(5, 7));
     const offset = Number(cal.weekday_offset) || 0;
+    const daysInMonth = Number(cal.days_in_month) || 0;
+    const prevMonthDays = new Date(year, month - 1, 0).getDate();
+
     for (let i = 0; i < offset; i++) {
-      const empty = document.createElement("div");
-      empty.className = "cal-empty";
-      calendarContainer.appendChild(empty);
+      calendarContainer.appendChild(outsideCell(prevMonthDays - offset + 1 + i, i));
     }
 
     const now = new Date();
-    const todayStr =
-      now.getFullYear() +
-      "-" +
-      String(now.getMonth() + 1).padStart(2, "0") +
-      "-" +
-      String(now.getDate()).padStart(2, "0");
+    const todayStr = now.getFullYear() + "-" + pad2(now.getMonth() + 1) + "-" + pad2(now.getDate());
 
-    const daysInMonth = Number(cal.days_in_month) || 0;
     for (let day = 1; day <= daysInMonth; day++) {
-      const dateStr =
-        cal.work_month + "-" + String(day).padStart(2, "0");
+      const dateStr = cal.work_month + "-" + pad2(day);
       const weekdayIdx = (offset + (day - 1)) % 7;
       const isSunday = weekdayIdx === 6;
       const holidayName =
@@ -511,19 +545,13 @@
       cell.setAttribute("role", "gridcell");
       cell.setAttribute("tabindex", "0");
 
-      if (weekdayIdx >= 5) {
-        cell.classList.add("is-weekend");
-      }
-      if (isSunday) {
-        cell.classList.add("is-sunday");
-      }
+      if (weekdayIdx >= 5) cell.classList.add("is-weekend");
+      if (isSunday) cell.classList.add("is-sunday");
       if (isHoliday) {
         cell.classList.add("is-holiday");
         cell.title = holidayName;
       }
-      if (dateStr === todayStr) {
-        cell.classList.add("is-today");
-      }
+      if (dateStr === todayStr) cell.classList.add("is-today");
       if (isWorked) {
         cell.classList.add("is-worked");
         if (entry.holiday) cell.classList.add("is-holiday-entry");
@@ -532,23 +560,30 @@
         cell.setAttribute("aria-label", dateStr + (holidayName ? ": " + holidayName : ""));
       }
 
-      // Day Top Row (Number + Clear button)
       const topRow = document.createElement("div");
       topRow.className = "cal-day-top";
-
       const numSpan = document.createElement("span");
       numSpan.className = "cal-day-num";
       numSpan.textContent = String(day);
       topRow.appendChild(numSpan);
+      cell.appendChild(topRow);
 
+      const chips = document.createElement("div");
+      chips.className = "cal-chips";
+
+      // Public holiday: a light "all-day event" chip, like a holiday calendar.
       if (isHoliday) {
-        const dot = document.createElement("span");
-        dot.className = "cal-holiday-dot";
-        dot.setAttribute("aria-hidden", "true");
-        topRow.appendChild(dot);
+        chips.appendChild(makeChip("cal-chip-public", holidayName, "", holidayName));
       }
 
+      // Worked day: a solid event chip with the hours, plus a clear button.
       if (isWorked) {
+        const chip = makeChip(
+          entry.holiday ? "cal-chip-holiday" : "cal-chip-work",
+          formatHours(entry.minutes) + "h",
+          entry.holiday ? "Holiday" : "Work",
+          formatHours(entry.minutes) + " h" + (entry.holiday ? " (holiday)" : "")
+        );
         const clearBtn = document.createElement("button");
         clearBtn.type = "button";
         clearBtn.className = "cal-day-clear";
@@ -560,47 +595,20 @@
           renderCalendarGrid();
           scheduleSave();
         });
-        topRow.appendChild(clearBtn);
+        chip.appendChild(clearBtn);
+        chip.classList.add("is-editable");
+        chip.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openDayEditor(dateStr);
+        });
+        chips.appendChild(chip);
       }
-      cell.appendChild(topRow);
-
-      // Holiday Label if holiday
-      if (isHoliday) {
-        const holLabel = document.createElement("span");
-        holLabel.className = "cal-holiday-label";
-        holLabel.textContent = holidayName;
-        holLabel.title = holidayName;
-        cell.appendChild(holLabel);
-      }
-
-      // Placed Day Info (Hours + H badge)
-      if (isWorked) {
-        const infoRow = document.createElement("div");
-        infoRow.className = "cal-day-info";
-
-        const hoursSpan = document.createElement("span");
-        hoursSpan.className = "cal-day-hours";
-        hoursSpan.textContent = formatHours(entry.minutes);
-        const unit = document.createElement("small");
-        unit.textContent = "h";
-        hoursSpan.appendChild(unit);
-        infoRow.appendChild(hoursSpan);
-
-        if (entry.holiday) {
-          const hBadge = document.createElement("span");
-          hBadge.className = "cal-badge-holiday";
-          hBadge.textContent = "H";
-          hBadge.title = "Holiday";
-          infoRow.appendChild(hBadge);
-        }
-        cell.appendChild(infoRow);
-      }
+      cell.appendChild(chips);
 
       // Tap-to-paint events
       cell.addEventListener("click", () => {
         applyToolToDate(state.activeTool, dateStr);
       });
-
       cell.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -611,10 +619,14 @@
       // Drag-and-drop events
       cell.addEventListener("dragover", (e) => {
         e.preventDefault();
+        cell.classList.add("is-drop-target");
       });
-
+      cell.addEventListener("dragleave", () => {
+        cell.classList.remove("is-drop-target");
+      });
       cell.addEventListener("drop", (e) => {
         e.preventDefault();
+        cell.classList.remove("is-drop-target");
         const raw = e.dataTransfer.getData("text/plain");
         if (!raw) return;
         let parsed;
@@ -630,6 +642,141 @@
 
       calendarContainer.appendChild(cell);
     }
+
+    // Fill the last week with days of the next month.
+    const used = offset + daysInMonth;
+    const trailing = (7 - (used % 7)) % 7;
+    for (let i = 1; i <= trailing; i++) {
+      calendarContainer.appendChild(outsideCell(i, (used + i - 1) % 7));
+    }
+  }
+
+  // --- Day editor (Google Calendar style popover) ---
+  const MONTHS = ["January", "February", "March", "April", "May", "June", "July",
+    "August", "September", "October", "November", "December"];
+  const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  let editorDialog = null;
+
+  function normalMinutes() {
+    if (Array.isArray(cal.presets)) {
+      for (const p of cal.presets) {
+        if (p.id === "normal") return Number(p.minutes);
+      }
+    }
+    return 450;
+  }
+
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function openDayEditor(dateStr) {
+    if (editorDialog) {
+      editorDialog.remove();
+      editorDialog = null;
+    }
+    const entry = state.entries.get(dateStr);
+    const holidayName =
+      cal.holidays && Object.prototype.hasOwnProperty.call(cal.holidays, dateStr) ? cal.holidays[dateStr] : null;
+    const y = Number(dateStr.slice(0, 4));
+    const m = Number(dateStr.slice(5, 7));
+    const d = Number(dateStr.slice(8, 10));
+    const weekday = WEEKDAYS[new Date(y, m - 1, d).getDay()];
+
+    const dlg = el("dialog", "day-editor");
+    dlg.setAttribute("aria-label", "Edit " + dateStr);
+    const form = el("form", "day-editor-form");
+    form.method = "dialog";
+
+    const head = el("div", "day-editor-head");
+    const title = el("h2", "", weekday + " " + d + " " + MONTHS[m - 1]);
+    head.appendChild(title);
+    const closeBtn = el("button", "day-editor-close", "×");
+    closeBtn.type = "button";
+    closeBtn.setAttribute("aria-label", "Close");
+    closeBtn.addEventListener("click", () => dlg.close());
+    head.appendChild(closeBtn);
+    form.appendChild(head);
+
+    if (holidayName) {
+      form.appendChild(el("p", "day-editor-public", holidayName));
+    }
+
+    const hoursLabel = el("label", "day-editor-field", "Hours worked");
+    const hoursInput = el("input");
+    hoursInput.type = "text";
+    hoursInput.inputMode = "decimal";
+    hoursInput.placeholder = "e.g. 6.5";
+    hoursInput.value = formatHours(entry ? entry.minutes : normalMinutes());
+    hoursLabel.appendChild(hoursInput);
+    form.appendChild(hoursLabel);
+
+    const holLabel = el("label", "day-editor-check");
+    const holInput = el("input");
+    holInput.type = "checkbox";
+    holInput.checked = entry ? entry.holiday : Boolean(holidayName);
+    holLabel.appendChild(holInput);
+    holLabel.appendChild(document.createTextNode(" Holiday (paid double)"));
+    form.appendChild(holLabel);
+
+    const error = el("p", "day-editor-error");
+    error.hidden = true;
+    form.appendChild(error);
+
+    const actions = el("div", "day-editor-actions");
+    if (entry) {
+      const removeBtn = el("button", "btn-danger-link", "Remove day");
+      removeBtn.type = "button";
+      removeBtn.addEventListener("click", () => {
+        state.entries.delete(dateStr);
+        dlg.close();
+        renderCalendarGrid();
+        scheduleSave();
+      });
+      actions.appendChild(removeBtn);
+    }
+    const saveBtn = el("button", "day-editor-save", "Save");
+    saveBtn.type = "submit";
+    actions.appendChild(saveBtn);
+    form.appendChild(actions);
+
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const mins = parseCustomMinutes(hoursInput.value);
+      if (mins === null) {
+        error.textContent = "Enter hours between 0.25 and 24.";
+        error.hidden = false;
+        hoursInput.focus();
+        return;
+      }
+      state.entries.set(dateStr, { minutes: mins, holiday: holInput.checked });
+      dlg.close();
+      renderCalendarGrid();
+      scheduleSave();
+    });
+
+    // Click on the dark backdrop closes it.
+    dlg.addEventListener("click", (e) => {
+      if (e.target === dlg) dlg.close();
+    });
+    dlg.addEventListener("close", () => {
+      dlg.remove();
+      if (editorDialog === dlg) editorDialog = null;
+    });
+
+    dlg.appendChild(form);
+    document.body.appendChild(dlg);
+    editorDialog = dlg;
+    if (typeof dlg.showModal === "function") {
+      dlg.showModal();
+    } else {
+      dlg.setAttribute("open", "");
+    }
+    hoursInput.focus();
+    hoursInput.select();
   }
 
   // --- Initial Render ---

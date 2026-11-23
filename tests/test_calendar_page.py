@@ -48,7 +48,16 @@ class TestCalendarPage(unittest.TestCase):
         self.assertEqual(data["days_in_month"], 30)
         self.assertIn("2026-11-01", data["holidays"])
         self.assertIn("2026-11-11", data["holidays"])
-        self.assertEqual(len(data["presets"]), 3)
+        self.assertEqual([p["id"] for p in data["presets"]], ["normal", "holiday"])
+
+    def test_calendar_home_redirects_to_current_month(self):
+        """GET /calendar redirects to this month's calendar, and the nav links to it."""
+        import datetime
+        resp = self.c.get("/calendar")
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(resp.headers["Location"].endswith("/calendar/" + datetime.date.today().strftime("%Y-%m")))
+        html = self.c.get("/costs").get_data(as_text=True)
+        self.assertIn('href="/calendar"', html)
 
     def test_invalid_calendar_month_404(self):
         """GET /calendar/2026-13 and /calendar/garbage return 404."""
