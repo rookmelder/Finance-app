@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Calendar {{ label }} - Finance{% endblock %}
 
 {% block head %}
@@ -7,27 +8,41 @@
 
 {% block content %}
 <div class="month-navigation">
-  <a class="nav-arrow" href="{{ url_for('calendar_page', work_month=prev_month) }}">← prev</a>
-  <h1>{{ label }}</h1>
-  <a class="nav-arrow" href="{{ url_for('calendar_page', work_month=next_month) }}">next →</a>
+  <a class="nav-arrow" href="{{ url_for('calendar_page', work_month=prev_month) }}" aria-label="Previous month">{{ icon('prev') }}</a>
+  <div class="month-title">
+    <h1>{{ label }}</h1>
+    <div class="month-sub">Paid in <time datetime="{{ pay_month }}">{{ pay_month | month_label }}</time></div>
+  </div>
+  <a class="nav-arrow" href="{{ url_for('calendar_page', work_month=next_month) }}" aria-label="Next month">{{ icon('next') }}</a>
 </div>
-
-<p class="help-text">Hours worked in {{ label }} are paid in <strong>{{ pay_month }}</strong>.</p>
 
 {% if legacy_note %}<p class="notice">{{ legacy_note }}</p>{% endif %}
 
 <script type="application/json" id="cal-data">{{ cal | tojson }}</script>
 
-<div id="presets" class="presets"></div>
-<div id="calendar" class="cal-grid" role="grid"></div>
+<div class="cal-toolbar">
+  <div id="presets" class="presets" role="toolbar" aria-label="Day tools"></div>
+  <p class="cal-hint">Pick a tool, then tap the days you worked. You can also drag a tool onto a day.</p>
+</div>
+
+<section class="card cal-card">
+  <div id="calendar" class="cal-grid" role="grid"></div>
+  <div class="cal-legend" aria-hidden="true">
+    <span><i class="lg-worked"></i>Worked</span>
+    <span><i class="lg-holiday"></i>Holiday</span>
+    <span><i class="lg-sunday"></i>Sunday</span>
+    <span><i class="lg-today"></i>Today</span>
+  </div>
+</section>
+
 <div id="status" class="cal-status" role="status" aria-live="polite"></div>
 <section class="card" id="summary"></section>
 
 <noscript><p class="error">The calendar needs JavaScript.</p></noscript>
 
 <div class="cal-links">
-  <p><a class="back-link" href="{{ url_for('income') }}">← All months</a></p>
-  <p><a id="edit-link" href="{{ url_for('income_edit', pay_month=pay_month) }}" {% if not cal.rows %}hidden{% endif %}>Actual pay, refresh rates, delete</a></p>
+  <a class="back-link" href="{{ url_for('income') }}">← All months</a>
+  <a id="edit-link" href="{{ url_for('income_edit', pay_month=pay_month) }}" {% if not cal.rows %}hidden{% endif %}>Actual pay, rates &amp; delete →</a>
 </div>
 {% endblock %}
 

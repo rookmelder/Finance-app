@@ -1,68 +1,81 @@
 {% extends "base.html" %}
 {% block title %}Settings - Finance{% endblock %}
 {% block content %}
-<h1>Settings</h1>
+<div class="page-head">
+  <div>
+    <h1>Settings</h1>
+    <p class="page-sub">New months use these. Existing months keep their own snapshot.</p>
+  </div>
+</div>
 
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
-<section class="card">
-  <h2>Global Settings</h2>
-  <form method="post" action="{{ url_for('settings') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<form method="post" action="{{ url_for('settings') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-    <label>Hourly Rate (€):
-      <input type="text" name="rate" value="{{ "%.2f"|format(settings.rate_cents / 100) }}" required>
-    </label>
-
-    <label>Fietsvergoeding per day (€):
-      <input type="text" name="allowance" value="{{ "%.2f"|format(settings.allowance_cents / 100) }}" required>
-    </label>
-
-    <label>Hours worked per day:
-      <input type="text" name="hours_per_day" value="{{ settings.minutes_per_day | hours }}" required>
-    </label>
-
-    <label>Kledijvergoeding per day (€):
-      <input type="text" name="clothing" value="{{ "%.2f"|format(settings.clothing_cents / 100) }}">
-    </label>
-
-    <label>Sunday premium per hour (€):
-      <input type="text" name="sunday_per_hour" value="{{ "%.2f"|format(settings.sunday_cents_per_hour / 100) }}">
-    </label>
-
-    <label>Sunday premium: maximum hours per Sunday:
-      <input type="text" name="sunday_cap_hours" value="{{ settings.sunday_cap_minutes | hours }}">
-    </label>
-
-    <label>Social security / RSZ (% of gross):
-      <input type="text" name="rsz" value="{{ settings.rsz_bp | percent }}">
-    </label>
-
-    <label>Other monthly benefit (€):
-      <input type="text" name="other" value="{{ "%.2f"|format(settings.other_cents / 100) }}">
-    </label>
-
+  <section class="card">
     <fieldset>
-      <legend>Budget Split Percentages (must sum to 100)</legend>
-      <label>Needs (%):
-        <input type="number" name="needs_pct" value="{{ settings.needs_pct }}" min="0" max="100" required>
-      </label>
-
-      <label>Free spend (%):
-        <input type="number" name="free_pct" value="{{ settings.free_pct }}" min="0" max="100" required>
-      </label>
-
-      <label>Savings (%):
-        <input type="number" name="save_pct" value="{{ settings.save_pct }}" min="0" max="100" required>
-      </label>
+      <legend>Pay</legend>
+      <p class="help-text">Your hourly wage and normal working day.</p>
+      <div class="form-grid">
+        <label>Hourly rate
+          <span class="field"><input type="text" name="rate" value="{{ "%.2f"|format(settings.rate_cents / 100) }}" inputmode="decimal" required><span class="unit">€/h</span></span>
+        </label>
+        <label>Hours worked per day
+          <span class="field"><input type="text" name="hours_per_day" value="{{ settings.minutes_per_day | hours }}" inputmode="decimal" required><span class="unit">h</span></span>
+        </label>
+        <label>Sunday premium per hour
+          <span class="field"><input type="text" name="sunday_per_hour" value="{{ "%.2f"|format(settings.sunday_cents_per_hour / 100) }}" inputmode="decimal"><span class="unit">€/h</span></span>
+        </label>
+        <label>Max premium hours per Sunday
+          <span class="field"><input type="text" name="sunday_cap_hours" value="{{ settings.sunday_cap_minutes | hours }}" inputmode="decimal"><span class="unit">h</span></span>
+        </label>
+      </div>
     </fieldset>
+  </section>
 
+  <section class="card">
+    <fieldset>
+      <legend>Allowances &amp; deductions</legend>
+      <div class="form-grid">
+        <label>Fietsvergoeding per day
+          <span class="field"><input type="text" name="allowance" value="{{ "%.2f"|format(settings.allowance_cents / 100) }}" inputmode="decimal" required><span class="unit">€</span></span>
+        </label>
+        <label>Kledijvergoeding per day
+          <span class="field"><input type="text" name="clothing" value="{{ "%.2f"|format(settings.clothing_cents / 100) }}" inputmode="decimal"><span class="unit">€</span></span>
+        </label>
+        <label>Social security / RSZ
+          <span class="field"><input type="text" name="rsz" value="{{ settings.rsz_bp | percent }}" inputmode="decimal"><span class="unit">%</span></span>
+        </label>
+        <label>Other monthly benefit
+          <span class="field"><input type="text" name="other" value="{{ "%.2f"|format(settings.other_cents / 100) }}" inputmode="decimal"><span class="unit">€</span></span>
+        </label>
+      </div>
+    </fieldset>
+  </section>
+
+  <section class="card">
+    <fieldset>
+      <legend>Budget split</legend>
+      <p class="help-text">Percentages of your monthly income. They must add up to 100.</p>
+      <div class="form-grid" style="grid-template-columns: repeat(3, 1fr);">
+        <label><i class="dot dot-needs"></i>Needs
+          <span class="field"><input type="number" name="needs_pct" value="{{ settings.needs_pct }}" min="0" max="100" required><span class="unit">%</span></span>
+        </label>
+        <label><i class="dot dot-free"></i>Free
+          <span class="field"><input type="number" name="free_pct" value="{{ settings.free_pct }}" min="0" max="100" required><span class="unit">%</span></span>
+        </label>
+        <label><i class="dot dot-savings"></i>Savings
+          <span class="field"><input type="number" name="save_pct" value="{{ settings.save_pct }}" min="0" max="100" required><span class="unit">%</span></span>
+        </label>
+      </div>
+    </fieldset>
     <label class="checkbox-label">
       <input type="checkbox" name="carry_over" value="1" {% if settings.carry_over %}checked{% endif %}>
-      Carry over leftover free-spend budget to next month
+      Carry leftover free-spend budget over to next month
     </label>
+  </section>
 
-    <button type="submit">Save Settings</button>
-  </form>
-</section>
+  <button type="submit">Save settings</button>
+</form>
 {% endblock %}

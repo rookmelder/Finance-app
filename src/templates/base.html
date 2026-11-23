@@ -1,8 +1,19 @@
+{%- from "_icons.html" import icon -%}
+{%- set nav_items = [
+  ('overview', 'Overview', ('overview',)),
+  ('income', 'Income', ('income', 'income_edit', 'calendar_page')),
+  ('costs', 'Costs', ('costs',)),
+  ('expenses', 'Expenses', ('expenses',)),
+  ('settings', 'Settings', ('settings',)),
+] -%}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0d0f14" media="(prefers-color-scheme: dark)">
   <title>{% block title %}Finance{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   {% block head %}{% endblock %}
@@ -10,31 +21,27 @@
 <body>
   <header class="app-header">
     <div class="header-container">
-      <span class="app-title"><a href="{{ url_for('overview') }}">Finance</a></span>
+      <span class="app-title"><a href="{{ url_for('overview') }}"><span class="brand-mark">€</span>Finance</a></span>
+      <nav class="top-nav" aria-label="Main">
+        {%- for ep, text, eps in nav_items %}
+        <a href="{{ url_for(ep) }}" class="{% if request.endpoint in eps %}active{% endif %}"{% if request.endpoint in eps %} aria-current="page"{% endif %}>{{ text }}</a>
+        {%- endfor %}
+      </nav>
       <form method="post" action="{{ url_for('logout') }}" class="logout-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button type="submit" class="btn-logout">Log out</button>
+        <button type="submit" class="btn-logout" aria-label="Log out">{{ icon('logout', 'icon icon-sm') }}<span>Log out</span></button>
       </form>
     </div>
-    <nav class="top-nav">
-      <a href="{{ url_for('overview') }}" class="{% if request.endpoint == 'overview' %}active{% endif %}">Overview</a>
-      <a href="{{ url_for('income') }}" class="{% if request.endpoint in ('income', 'income_edit') %}active{% endif %}">Income</a>
-      <a href="{{ url_for('costs') }}" class="{% if request.endpoint == 'costs' %}active{% endif %}">Costs</a>
-      <a href="{{ url_for('expenses') }}" class="{% if request.endpoint == 'expenses' %}active{% endif %}">Expenses</a>
-      <a href="{{ url_for('settings') }}" class="{% if request.endpoint == 'settings' %}active{% endif %}">Settings</a>
-    </nav>
   </header>
 
   <main class="container">
     {% block content %}{% endblock %}
   </main>
 
-  <nav class="bottom-nav">
-    <a href="{{ url_for('overview') }}" class="{% if request.endpoint == 'overview' %}active{% endif %}">Overview</a>
-    <a href="{{ url_for('income') }}" class="{% if request.endpoint in ('income', 'income_edit') %}active{% endif %}">Income</a>
-    <a href="{{ url_for('costs') }}" class="{% if request.endpoint == 'costs' %}active{% endif %}">Costs</a>
-    <a href="{{ url_for('expenses') }}" class="{% if request.endpoint == 'expenses' %}active{% endif %}">Expenses</a>
-    <a href="{{ url_for('settings') }}" class="{% if request.endpoint == 'settings' %}active{% endif %}">Settings</a>
+  <nav class="bottom-nav" aria-label="Main">
+    {%- for ep, text, eps in nav_items %}
+    <a href="{{ url_for(ep) }}" class="{% if request.endpoint in eps %}active{% endif %}"{% if request.endpoint in eps %} aria-current="page"{% endif %}>{{ icon(ep) }}<span>{{ text }}</span></a>
+    {%- endfor %}
   </nav>
   {% block scripts %}{% endblock %}
 </body>

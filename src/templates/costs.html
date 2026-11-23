@@ -1,136 +1,126 @@
 {% extends "base.html" %}
 {% block title %}Recurring Costs - Finance{% endblock %}
 {% block content %}
-<h1>Recurring Costs</h1>
+<div class="page-head">
+  <div>
+    <h1>Recurring costs</h1>
+    <p class="page-sub">Bills and subscriptions, set aside from your needs budget each month.</p>
+  </div>
+</div>
 
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
-<section class="card summary-card">
-  <h2>Fixed Costs Totals</h2>
-  <div class="stat-grid">
-    <div class="stat">
-      <span class="label">Monthly set-aside:</span>
-      <span class="value"><strong>{{ total_monthly | money }}</strong> per month</span>
+<section class="card">
+  <div class="stat-grid cols-2">
+    <div class="stat highlight-stat">
+      <span class="label">Monthly set-aside</span>
+      <span class="value">{{ total_monthly | money }}</span>
     </div>
     <div class="stat">
-      <span class="label">Yearly set-aside:</span>
-      <span class="value"><strong>{{ total_yearly | money }}</strong> per year</span>
+      <span class="label">Per year</span>
+      <span class="value">{{ total_yearly | money }}</span>
     </div>
   </div>
 </section>
 
-<section class="card">
-  <h2>Add Recurring Cost</h2>
+<details class="card"{% if not costs %} open{% endif %}>
+  <summary>Add recurring cost</summary>
   <form method="post" action="{{ url_for('costs') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="action" value="add">
 
-    <label>Name:
-      <input type="text" name="name" required placeholder="e.g. Internet or Car Insurance">
-    </label>
+    <div class="form-grid">
+      <label class="span-2">Name
+        <input type="text" name="name" required placeholder="e.g. Internet or Car insurance">
+      </label>
 
-    <label>Amount (€):
-      <input type="text" name="amount" required placeholder="e.g. 29.99">
-    </label>
+      <label>Amount
+        <span class="field"><input type="text" name="amount" required placeholder="29.99" inputmode="decimal"><span class="unit">€</span></span>
+      </label>
 
-    <label>Every N months:
-      <input type="number" name="every_months" value="1" min="1" required>
-    </label>
+      <label>Every N months
+        <input type="number" name="every_months" value="1" min="1" inputmode="numeric" required>
+      </label>
 
-    <label>Notes (optional):
-      <input type="text" name="notes" placeholder="e.g. Billed quarterly">
-    </label>
+      <label>Next due <span class="muted">(optional)</span>
+        <input type="date" name="next_due">
+      </label>
 
-    <label>Next Due (optional):
-      <input type="date" name="next_due">
-    </label>
+      <label>Notes <span class="muted">(optional)</span>
+        <input type="text" name="notes" placeholder="e.g. Billed quarterly">
+      </label>
+    </div>
 
     <label class="checkbox-label">
       <input type="checkbox" name="active" value="1" checked>
       Active (included in monthly set-aside)
     </label>
 
-    <button type="submit">Add Cost</button>
+    <button type="submit">Add cost</button>
   </form>
-</section>
+</details>
 
 <section class="card">
-  <h2>Recurring Costs List</h2>
-  <div class="table-responsive">
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Amount</th>
-          <th>Frequency</th>
-          <th>Monthly Set-Aside</th>
-          <th>Status</th>
-          <th>Next Due</th>
-          <th>Notes</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for cost in costs %}
-        <tr>
-          <td><strong>{{ cost.name }}</strong></td>
-          <td>{{ cost.amount_cents | money }}</td>
-          <td>Every {{ cost.every_months }} month{% if cost.every_months > 1 %}s{% endif %}</td>
-          <td>{{ cost.monthly_set_aside | money }} per month</td>
-          <td>
-            {% if cost.active %}
-              <span class="badge badge-active">Active</span>
-            {% else %}
-              <span class="badge badge-inactive">Inactive</span>
-            {% endif %}
-          </td>
-          <td>{{ cost.next_due or '—' }}</td>
-          <td>{{ cost.notes }}</td>
-          <td>
-            <details class="inline-details">
-              <summary class="btn-sm">Edit</summary>
-              <form method="post" action="{{ url_for('costs') }}" class="edit-box">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="action" value="update">
-                <input type="hidden" name="id" value="{{ cost.id }}">
+  <div class="card-head">
+    <h2>Your costs</h2>
+    <span class="meta">{{ costs | length }} item{% if costs | length != 1 %}s{% endif %}</span>
+  </div>
+  <div class="list">
+    {% for cost in costs %}
+    <div class="list-item cost-item{% if not cost.active %} is-inactive{% endif %}">
+      <div class="list-main">
+        <div class="list-title">{{ cost.name }}{% if not cost.active %} <span class="badge badge-inactive">Inactive</span>{% endif %}</div>
+        <div class="list-meta">
+          Every {% if cost.every_months > 1 %}{{ cost.every_months }} months{% else %}month{% endif %}
+          {% if cost.next_due %} · next {{ cost.next_due }}{% endif %}
+          {% if cost.notes %} · {{ cost.notes }}{% endif %}
+        </div>
+      </div>
+      <div class="list-end">
+        <div class="list-amount">{{ cost.amount_cents | money }}</div>
+        <div class="list-amount-sub">{{ cost.monthly_set_aside | money }} per month</div>
+      </div>
+      <details class="inline-details">
+        <summary>Edit</summary>
+        <form method="post" action="{{ url_for('costs') }}" class="edit-box">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="update">
+          <input type="hidden" name="id" value="{{ cost.id }}">
 
-                <label>Name:
-                  <input type="text" name="name" value="{{ cost.name }}" required>
-                </label>
-                <label>Amount (€):
-                  <input type="text" name="amount" value="{{ "%.2f"|format(cost.amount_cents / 100) }}" required>
-                </label>
-                <label>Every N months:
-                  <input type="number" name="every_months" value="{{ cost.every_months }}" min="1" required>
-                </label>
-                <label>Notes:
-                  <input type="text" name="notes" value="{{ cost.notes }}">
-                </label>
-                <label>Next Due:
-                  <input type="date" name="next_due" value="{{ cost.next_due or '' }}">
-                </label>
-                <label class="checkbox-label">
-                  <input type="checkbox" name="active" value="1" {% if cost.active %}checked{% endif %}>
-                  Active
-                </label>
-                <button type="submit" class="btn-sm">Save</button>
-              </form>
-            </details>
-            <form method="post" action="{{ url_for('costs') }}" class="inline-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="action" value="delete">
-              <input type="hidden" name="id" value="{{ cost.id }}">
-              <button type="submit" class="btn-danger btn-sm">Delete</button>
-            </form>
-          </td>
-        </tr>
-        {% else %}
-        <tr>
-          <td colspan="8">No recurring costs added yet.</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+          <div class="form-grid">
+            <label class="span-2">Name
+              <input type="text" name="name" value="{{ cost.name }}" required>
+            </label>
+            <label>Amount
+              <span class="field"><input type="text" name="amount" value="{{ "%.2f"|format(cost.amount_cents / 100) }}" inputmode="decimal" required><span class="unit">€</span></span>
+            </label>
+            <label>Every N months
+              <input type="number" name="every_months" value="{{ cost.every_months }}" min="1" required>
+            </label>
+            <label>Next due
+              <input type="date" name="next_due" value="{{ cost.next_due or '' }}">
+            </label>
+            <label>Notes
+              <input type="text" name="notes" value="{{ cost.notes }}">
+            </label>
+          </div>
+          <label class="checkbox-label">
+            <input type="checkbox" name="active" value="1" {% if cost.active %}checked{% endif %}>
+            Active
+          </label>
+          <button type="submit" class="btn-sm">Save changes</button>
+        </form>
+        <form method="post" action="{{ url_for('costs') }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="id" value="{{ cost.id }}">
+          <div class="item-actions"><button type="submit" class="btn-ghost danger btn-sm">Delete this cost</button></div>
+        </form>
+      </details>
+    </div>
+    {% else %}
+    <p class="empty">No recurring costs added yet.</p>
+    {% endfor %}
   </div>
 </section>
 {% endblock %}

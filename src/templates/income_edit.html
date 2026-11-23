@@ -1,99 +1,81 @@
 {% extends "base.html" %}
 {% block title %}Edit Income {{ income.pay_month }} - Finance{% endblock %}
 {% block content %}
-<div class="page-header">
-  <a href="{{ url_for('income') }}" class="back-link">&larr; Back to Income</a>
-  <h1>Edit Income for {{ income.pay_month }}</h1>
+<a href="{{ url_for('income') }}" class="back-link">&larr; Back to income</a>
+<div class="page-head" style="margin-top: 10px;">
+  <div>
+    <h1><time datetime="{{ income.pay_month }}">{{ income.pay_month | month_label }}</time> pay</h1>
+    <p class="page-sub">For work in {{ income.work_month | month_label }}</p>
+  </div>
 </div>
 
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
 <section class="card">
-  <h2>Details &amp; Snapshot</h2>
-  <div class="stat-grid">
-    <div class="stat">
-      <span class="label">Pay Month:</span>
-      <span class="value">{{ income.pay_month }}</span>
-    </div>
-    <div class="stat">
-      <span class="label">Work Month:</span>
-      <span class="value">{{ income.work_month }}</span>
-    </div>
-    <div class="stat">
-      <span class="label">Snapshot Rate:</span>
-      <span class="value">{{ income.rate_cents | money }} / h</span>
-    </div>
-    <div class="stat">
-      <span class="label">Snapshot Allowance:</span>
-      <span class="value">{{ income.allowance_cents | money }} / day</span>
-    </div>
-    <div class="stat">
-      <span class="label">Snapshot Hours/day:</span>
-      <span class="value">{{ income.minutes_per_day | hours }} h</span>
-    </div>
-    <div class="stat">
-      <span class="label">Actual Pay:</span>
-      <span class="value">
-        {% if income.actual_cents is not none %}
-          {{ income.actual_cents | money }}
-        {% else %}
-          —
-        {% endif %}
-      </span>
-    </div>
+  <div class="card-head">
+    <h2>Estimate</h2>
+    {% if income.actual_cents is not none %}<span class="badge badge-actual">Actual {{ income.actual_cents | money }}</span>{% endif %}
+  </div>
+  {% include "_breakdown.html" %}
+  <div class="card-links">
+    <a href="{{ url_for('calendar_page', work_month=income.work_month) }}">Edit days on the calendar →</a>
   </div>
 </section>
 
 <section class="card">
-  <h2>Estimate</h2>
-  {% include "_breakdown.html" %}
-</section>
-
-<section class="card">
-  <h2>Days and hours</h2>
-  <p>Edit the worked days of {{ income.work_month }} on the calendar.</p>
-  <p><a class="btn" href="{{ url_for('calendar_page', work_month=income.work_month) }}">Open calendar</a></p>
-</section>
-
-<section class="card">
-  <h2>Rates snapshot</h2>
-  <p>This month keeps the rates it had when it was created. Use this after changing your settings.</p>
-  <form method="post" action="{{ url_for('income_edit', pay_month=income.pay_month) }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="action" value="refresh_snapshot">
-    <button type="submit">Use current settings for this month</button>
-  </form>
-</section>
-
-<section class="card">
-  <h2>Actual Received Pay</h2>
+  <h2>Actual received pay</h2>
+  <p class="help-text">Once your payslip arrives, enter the real amount. The budget then uses it instead of the estimate.</p>
   <form method="post" action="{{ url_for('income_edit', pay_month=income.pay_month) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="action" value="set_actual">
 
-    <label>Actual pay (€):
-      <input type="text" name="actual" value="{% if income.actual_cents is not none %}{{ "%.2f"|format(income.actual_cents / 100) }}{% endif %}" placeholder="e.g. 2100.00" required>
+    <label>Actual pay
+      <span class="field"><input type="text" name="actual" value="{% if income.actual_cents is not none %}{{ "%.2f"|format(income.actual_cents / 100) }}{% endif %}" placeholder="2100.00" inputmode="decimal" required><span class="unit">€</span></span>
     </label>
 
-    <button type="submit">Set Actual Pay</button>
+    <button type="submit">Set actual pay</button>
   </form>
 
   {% if income.actual_cents is not none %}
   <form method="post" action="{{ url_for('income_edit', pay_month=income.pay_month) }}" class="mt-2">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="action" value="clear_actual">
-    <button type="submit" class="btn-secondary">Clear Actual Pay</button>
+    <button type="submit" class="btn-secondary">Clear actual pay</button>
   </form>
   {% endif %}
 </section>
 
-<section class="card danger-card">
-  <h2>Delete Record</h2>
-  <p>Permanently remove this income record.</p>
+<section class="card">
+  <h2>Rates snapshot</h2>
+  <p class="help-text">This month keeps the rates it had when it was created. Use this after changing your settings.</p>
+  <div class="stat-grid">
+    <div class="stat">
+      <span class="label">Hourly rate</span>
+      <span class="value">{{ income.rate_cents | money }} / h</span>
+    </div>
+    <div class="stat">
+      <span class="label">Allowance</span>
+      <span class="value">{{ income.allowance_cents | money }} / day</span>
+    </div>
+    <div class="stat">
+      <span class="label">Hours per day</span>
+      <span class="value">{{ income.minutes_per_day | hours }} h</span>
+    </div>
+  </div>
+  <form method="post" action="{{ url_for('income_edit', pay_month=income.pay_month) }}" class="mt-2">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="refresh_snapshot">
+    <button type="submit" class="btn-secondary">Use current settings for this month</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Delete record</h2>
+  <p class="help-text">Permanently remove this month's income and its calendar days.</p>
   <form method="post" action="{{ url_for('income_edit', pay_month=income.pay_month) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="action" value="delete">
-    <button type="submit" class="btn-danger">Delete Income</button>
+    <button type="submit" class="btn-danger">Delete income</button>
   </form>
 </section>
 {% endblock %}

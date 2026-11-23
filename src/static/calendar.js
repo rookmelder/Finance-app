@@ -37,9 +37,25 @@
     }
   }
 
+  let statusTimer = null;
+
+  // Shows a small toast. "Saved" fades out by itself; errors and hints stay a little longer.
   function setStatus(text) {
-    if (statusContainer) {
-      statusContainer.textContent = text;
+    if (!statusContainer) return;
+    if (statusTimer) {
+      clearTimeout(statusTimer);
+      statusTimer = null;
+    }
+    statusContainer.textContent = text;
+    const isSaving = text === "Saving…";
+    const isSaved = text === "Saved";
+    statusContainer.classList.toggle("is-error", !isSaving && !isSaved && text !== "");
+    statusContainer.classList.toggle("is-visible", text !== "");
+    if (isSaved) {
+      statusContainer.textContent = "Saved ✓";
+      statusTimer = setTimeout(() => statusContainer.classList.remove("is-visible"), 1400);
+    } else if (!isSaving && text !== "") {
+      statusTimer = setTimeout(() => statusContainer.classList.remove("is-visible"), 4000);
     }
   }
 
@@ -62,9 +78,16 @@
     if (!summaryContainer) return;
     clearEl(summaryContainer);
 
+    const head = document.createElement("div");
+    head.className = "card-head";
     const heading = document.createElement("h2");
-    heading.textContent = "Estimate for " + data.pay_month;
-    summaryContainer.appendChild(heading);
+    heading.textContent = "Estimate";
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = "paid " + data.pay_month;
+    head.appendChild(heading);
+    head.appendChild(meta);
+    summaryContainer.appendChild(head);
 
     if (!data.rows || data.rows.length === 0) {
       const emptyNote = document.createElement("p");
@@ -74,16 +97,37 @@
       return;
     }
 
-    const counts = document.createElement("div");
-    counts.className = "cal-sum-counts";
-    const dayWord = data.days === 1 ? "1 day" : data.days + " days";
-    const sunWord = data.sundays === 1 ? "1 Sunday" : data.sundays + " Sundays";
-    counts.textContent = dayWord + " · " + sunWord;
-    summaryContainer.appendChild(counts);
+    let totalMinutes = 0;
+    let holidayDays = 0;
+    for (const info of state.entries.values()) {
+      totalMinutes += info.minutes;
+      if (info.holiday) holidayDays += 1;
+    }
+    const tiles = document.createElement("div");
+    tiles.className = "cal-sum-tiles";
+    const tileData = [
+      [String(data.days), data.days === 1 ? "day" : "days"],
+      [formatHours(totalMinutes), "hours"],
+      [String(data.sundays), data.sundays === 1 ? "Sunday" : "Sundays"],
+      [String(holidayDays), holidayDays === 1 ? "holiday" : "holidays"],
+    ];
+    for (const [num, word] of tileData) {
+      const tile = document.createElement("div");
+      tile.className = "cal-sum-tile";
+      const b = document.createElement("b");
+      b.textContent = num;
+      const s = document.createElement("span");
+      s.textContent = word;
+      tile.appendChild(b);
+      tile.appendChild(s);
+      tiles.appendChild(tile);
+    }
+    summaryContainer.appendChild(tiles);
 
     const rowsWrap = document.createElement("div");
     rowsWrap.className = "cal-sum-rows";
     for (const r of data.rows) {
+      if (r.kind === "total") continue; // shown large below
       const row = document.createElement("div");
       row.className = "sum-row sum-" + r.kind;
 
@@ -98,10 +142,17 @@
     }
     summaryContainer.appendChild(rowsWrap);
 
-    const total = document.createElement("div");
+    const totalWrap = document.createElement("div");
+    totalWrap.className = "cal-sum-total";
+    const totalLabel = document.createElement("span");
+    totalLabel.className = "label";
+    totalLabel.textContent = "Estimated total";
+    const total = document.createElement("span");
     total.className = "big-number";
     total.textContent = data.total;
-    summaryContainer.appendChild(total);
+    totalWrap.appendChild(totalLabel);
+    totalWrap.appendChild(total);
+    summaryContainer.appendChild(totalWrap);
   }
 
   // --- Save Logic (Debounce & Single In-Flight) ---
@@ -239,6 +290,25 @@
   // --- Presets Bar ---
   let customInput = null;
 
+  // Chip content: colour swatch, label and (optional) hours.
+  function chipParts(labelText, metaText) {
+    const frag = document.createDocumentFragment();
+    const sw = document.createElement("span");
+    sw.className = "chip-swatch";
+    sw.setAttribute("aria-hidden", "true");
+    frag.appendChild(sw);
+    const lab = document.createElement("span");
+    lab.textContent = labelText;
+    frag.appendChild(lab);
+    if (metaText) {
+      const meta = document.createElement("span");
+      meta.className = "chip-meta";
+      meta.textContent = metaText;
+      frag.appendChild(meta);
+    }
+    return frag;
+  }
+
   function updatePresetsBarActiveStates() {
     if (!presetsContainer) return;
     const buttons = presetsContainer.querySelectorAll("button");
@@ -272,7 +342,8 @@
         btn.setAttribute("data-preset-id", p.id);
         btn.setAttribute("aria-pressed", "false");
         btn.draggable = true;
-        btn.textContent = p.label + " " + formatHours(p.minutes) + " h";
+        btn.title = p.label + " (" + formatHours(p.minutes) + " h)";
+        btn.appendChild(chipParts(p.label, formatHours(p.minutes) + "h"));
 
         btn.addEventListener("click", () => {
           state.activeTool = { type: "preset", preset: p };
@@ -304,7 +375,9 @@
     customInput = document.createElement("input");
     customInput.type = "text";
     customInput.className = "preset-custom-input";
-    customInput.placeholder = "hours, e.g. 6.5";
+    customInput.placeholder = "Custom h";
+    customInput.inputMode = "decimal";
+    customInput.setAttribute("aria-label", "Custom hours, e.g. 6.5");
 
     const customBtn = document.createElement("button");
     customBtn.type = "button";
@@ -312,7 +385,7 @@
     customBtn.setAttribute("data-tool-type", "custom");
     customBtn.setAttribute("aria-pressed", "false");
     customBtn.draggable = true;
-    customBtn.textContent = "Use custom";
+    customBtn.textContent = "Use";
 
     function getCustomMinutesOrAlert() {
       const mins = parseCustomMinutes(customInput.value);
@@ -368,7 +441,7 @@
     eraseBtn.setAttribute("data-tool-type", "erase");
     eraseBtn.setAttribute("aria-pressed", "false");
     eraseBtn.draggable = true;
-    eraseBtn.textContent = "Erase";
+    eraseBtn.appendChild(chipParts("Erase", ""));
 
     eraseBtn.addEventListener("click", () => {
       state.activeTool = { type: "erase" };
@@ -398,7 +471,7 @@
     const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     for (const name of weekdays) {
       const th = document.createElement("div");
-      th.className = "cal-header-cell";
+      th.className = "cal-header-cell" + (name === "Sat" || name === "Sun" ? " is-weekend" : "");
       th.textContent = name;
       calendarContainer.appendChild(th);
     }
@@ -422,7 +495,8 @@
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr =
         cal.work_month + "-" + String(day).padStart(2, "0");
-      const isSunday = (offset + (day - 1)) % 7 === 6;
+      const weekdayIdx = (offset + (day - 1)) % 7;
+      const isSunday = weekdayIdx === 6;
       const holidayName =
         cal.holidays && Object.prototype.hasOwnProperty.call(cal.holidays, dateStr)
           ? cal.holidays[dateStr]
@@ -437,6 +511,9 @@
       cell.setAttribute("role", "gridcell");
       cell.setAttribute("tabindex", "0");
 
+      if (weekdayIdx >= 5) {
+        cell.classList.add("is-weekend");
+      }
       if (isSunday) {
         cell.classList.add("is-sunday");
       }
@@ -449,6 +526,10 @@
       }
       if (isWorked) {
         cell.classList.add("is-worked");
+        if (entry.holiday) cell.classList.add("is-holiday-entry");
+        cell.setAttribute("aria-label", dateStr + ": " + formatHours(entry.minutes) + " hours" + (entry.holiday ? ", holiday" : ""));
+      } else {
+        cell.setAttribute("aria-label", dateStr + (holidayName ? ": " + holidayName : ""));
       }
 
       // Day Top Row (Number + Clear button)
@@ -459,6 +540,13 @@
       numSpan.className = "cal-day-num";
       numSpan.textContent = String(day);
       topRow.appendChild(numSpan);
+
+      if (isHoliday) {
+        const dot = document.createElement("span");
+        dot.className = "cal-holiday-dot";
+        dot.setAttribute("aria-hidden", "true");
+        topRow.appendChild(dot);
+      }
 
       if (isWorked) {
         const clearBtn = document.createElement("button");
@@ -493,6 +581,9 @@
         const hoursSpan = document.createElement("span");
         hoursSpan.className = "cal-day-hours";
         hoursSpan.textContent = formatHours(entry.minutes);
+        const unit = document.createElement("small");
+        unit.textContent = "h";
+        hoursSpan.appendChild(unit);
         infoRow.appendChild(hoursSpan);
 
         if (entry.holiday) {

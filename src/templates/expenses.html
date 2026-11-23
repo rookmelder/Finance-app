@@ -1,91 +1,79 @@
 {% extends "base.html" %}
 {% block title %}Expenses - Finance{% endblock %}
 {% block content %}
-<h1>Expenses</h1>
+<div class="page-head">
+  <div>
+    <h1>Expenses</h1>
+    <p class="page-sub">Log what you spend and which bucket it comes from.</p>
+  </div>
+</div>
 
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
 <section class="card">
-  <h2>Filter by Month</h2>
-  <form method="get" action="{{ url_for('expenses') }}" class="filter-form">
-    <label>Month:
-      <input type="month" name="month" value="{{ month or '' }}">
-    </label>
-    <button type="submit">Filter</button>
-    {% if month %}
-      <a href="{{ url_for('expenses') }}" class="btn-link">Clear Filter</a>
-    {% endif %}
-  </form>
-</section>
-
-<section class="card">
-  <h2>Log Expense</h2>
+  <h2>Log expense</h2>
   <form method="post" action="{{ url_for('expenses') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="action" value="add">
     {% if month %}<input type="hidden" name="month_filter" value="{{ month }}">{% endif %}
 
-    <label>Date:
-      <input type="date" name="date" value="{{ today }}" required>
-    </label>
+    <div class="form-grid">
+      <label>Amount
+        <span class="field"><input type="text" name="amount" required placeholder="15.50" inputmode="decimal"><span class="unit">€</span></span>
+      </label>
 
-    <label>Amount (€):
-      <input type="text" name="amount" required placeholder="e.g. 15.50">
-    </label>
+      <label>Bucket
+        <select name="bucket" required>
+          <option value="needs">Needs</option>
+          <option value="free" selected>Free spend</option>
+          <option value="savings">Savings</option>
+        </select>
+      </label>
 
-    <label>Bucket:
-      <select name="bucket" required>
-        <option value="needs">Needs</option>
-        <option value="free" selected>Free spend</option>
-        <option value="savings">Savings</option>
-      </select>
-    </label>
+      <label>Date
+        <input type="date" name="date" value="{{ today }}" required>
+      </label>
 
-    <label>Note (optional):
-      <input type="text" name="note" placeholder="e.g. Groceries or Coffee">
-    </label>
+      <label>Note <span class="muted">(optional)</span>
+        <input type="text" name="note" placeholder="e.g. Groceries">
+      </label>
+    </div>
 
-    <button type="submit">Add Expense</button>
+    <button type="submit">Add expense</button>
   </form>
 </section>
 
 <section class="card">
-  <h2>Expenses Log {% if month %}({{ month }}){% endif %}</h2>
-  <div class="table-responsive">
-    <table>
-      <thead>
-        <tr>
-          <th>Date</th>
-          <th>Amount</th>
-          <th>Bucket</th>
-          <th>Note</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for exp in expenses %}
-        <tr>
-          <td>{{ exp.date }}</td>
-          <td>{{ exp.amount_cents | money }}</td>
-          <td><span class="badge badge-bucket badge-{{ exp.bucket }}">{{ exp.bucket }}</span></td>
-          <td>{{ exp.note }}</td>
-          <td>
-            <form method="post" action="{{ url_for('expenses') }}" class="inline-form">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="action" value="delete">
-              <input type="hidden" name="id" value="{{ exp.id }}">
-              {% if month %}<input type="hidden" name="month_filter" value="{{ month }}">{% endif %}
-              <button type="submit" class="btn-danger btn-sm">Delete</button>
-            </form>
-          </td>
-        </tr>
-        {% else %}
-        <tr>
-          <td colspan="5">No expenses found.</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="card-head">
+    <h2>{% if month %}{{ month | month_label }}{% else %}All expenses{% endif %}</h2>
+    <form method="get" action="{{ url_for('expenses') }}" class="filter-form">
+      <input type="month" name="month" value="{{ month or '' }}" aria-label="Filter by month">
+      <button type="submit" class="btn-secondary btn-sm">Filter</button>
+      {% if month %}<a href="{{ url_for('expenses') }}" class="btn-link">Clear</a>{% endif %}
+    </form>
+  </div>
+  <div class="list">
+    {% for exp in expenses %}
+    {% if loop.changed(exp.date) %}<div class="date-group">{{ exp.date }}</div>{% endif %}
+    <div class="list-item">
+      <div class="list-main">
+        <div class="list-title">{{ exp.note or '—' }}</div>
+        <div class="list-meta"><span class="bucket-chip"><i class="dot dot-{{ exp.bucket }}"></i>{{ exp.bucket }}</span></div>
+      </div>
+      <div class="list-end">
+        <div class="list-amount">{{ exp.amount_cents | money }}</div>
+      </div>
+      <form method="post" action="{{ url_for('expenses') }}" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="delete">
+        <input type="hidden" name="id" value="{{ exp.id }}">
+        {% if month %}<input type="hidden" name="month_filter" value="{{ month }}">{% endif %}
+        <button type="submit" class="btn-ghost danger btn-sm" aria-label="Delete expense">✕</button>
+      </form>
+    </div>
+    {% else %}
+    <p class="empty">No expenses found.</p>
+    {% endfor %}
   </div>
 </section>
 {% endblock %}

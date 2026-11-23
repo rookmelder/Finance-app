@@ -1,30 +1,43 @@
 {% extends "base.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Income - Finance{% endblock %}
 {% block content %}
-<h1>Income</h1>
+<div class="page-head">
+  <div>
+    <h1>Income</h1>
+    <p class="page-sub">Pick the month you worked. It's paid the month after.</p>
+  </div>
+</div>
 
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
 <div class="month-list">
   {% for m in months %}
   <a class="month-card{% if m.is_default %} month-card-default{% endif %}" href="{{ url_for('calendar_page', work_month=m.work_month) }}"{% if m.is_default %} id="current"{% endif %}>
-    <div class="month-card-header">
-      <span class="month-label">{{ m.label }}</span>
-      <div class="month-card-badges">
-        {% if m.is_default %}<span class="badge badge-active">Next up</span>{% endif %}
-        {% if m.has_income and not m.per_day %}<span class="badge badge-inactive">totals</span>{% endif %}
-      </div>
-    </div>
-    <div class="month-card-sub">Work month -> paid {{ m.pay_month }}</div>
+    <span class="month-icon"><b>{{ (m.label.split(' ')[0])[:3] }}</b><small>{{ m.work_month[:4] }}</small></span>
+    <span class="month-card-body">
+      <span class="month-card-header">
+        <span class="month-label">{{ m.label }}</span>
+        <span class="month-card-badges">
+          {% if m.is_default %}<span class="badge badge-active">Next up</span>{% endif %}
+          {% if m.has_income and not m.per_day %}<span class="badge badge-inactive">Totals</span>{% endif %}
+        </span>
+      </span>
+      <span class="month-card-sub">Paid in <time datetime="{{ m.pay_month }}">{{ m.pay_month | month_label }}</time></span>
+    </span>
     {% if m.has_income %}
-    <div class="month-card-stats">
-      <span>{{ m.days }} {% if m.days == 1 %}day{% else %}days{% endif %}</span>
+    <span class="month-card-stats">
       <span class="month-card-estimate">{{ m.estimate | money }}</span>
       {% if m.actual is not none %}
-      <span class="month-card-actual">Actual: {{ m.actual | money }}</span>
+      <span class="month-card-actual">Actual {{ m.actual | money }}</span>
+      {% else %}
+      <span class="month-card-days">{{ m.days }} {% if m.days == 1 %}day{% else %}days{% endif %}</span>
       {% endif %}
-    </div>
+    </span>
+    {% else %}
+    <span class="month-card-empty">No days yet</span>
     {% endif %}
+    <span class="month-card-chevron">{{ icon('chevron', 'icon icon-sm') }}</span>
   </a>
   {% endfor %}
 </div>
@@ -34,26 +47,30 @@
   <form method="post" action="{{ url_for('income') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
-    <label>Work Month:
-      <input type="month" name="work_month" value="{{ default_wm }}" required>
-    </label>
+    <div class="form-grid">
+      <label class="span-2">Work month
+        <input type="month" name="work_month" value="{{ default_wm }}" required>
+      </label>
+    </div>
     <p class="help-text">Pay month will be <strong>{{ default_pm }}</strong> (next month).</p>
 
-    <label>Days worked:
-      <input type="number" name="days" min="0" max="31" required>
-    </label>
+    <div class="form-grid">
+      <label>Days worked
+        <input type="number" name="days" min="0" max="31" inputmode="numeric" required>
+      </label>
 
-    <label>Total hours override (optional):
-      <input type="text" name="hours_override" placeholder="e.g. 135 or 7.5">
-    </label>
+      <label>Sundays worked
+        <input type="number" name="sundays" value="0" min="0" max="31" inputmode="numeric">
+      </label>
 
-    <label>Sundays worked:
-      <input type="number" name="sundays" value="0" min="0" max="31">
-    </label>
+      <label>Total hours override <span class="muted">(optional)</span>
+        <input type="text" name="hours_override" placeholder="e.g. 135 or 7.5" inputmode="decimal">
+      </label>
 
-    <label>Holiday hours worked (paid double, optional):
-      <input type="text" name="holiday_hours" placeholder="e.g. 7.5">
-    </label>
+      <label>Holiday hours, paid double <span class="muted">(optional)</span>
+        <input type="text" name="holiday_hours" placeholder="e.g. 7.5" inputmode="decimal">
+      </label>
+    </div>
 
     <button type="submit">Add by totals</button>
   </form>

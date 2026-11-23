@@ -181,6 +181,22 @@ def _render_expenses(conn, month=None, error=None, status_code=200):
     )
 
 
+def _month_label(month: str) -> str:
+    """'2026-11' -> 'November 2026' (display only); anything else is returned unchanged."""
+    try:
+        year, mon = int(month[:4]), int(month[5:7])
+        return f"{calendar.month_name[mon]} {year}"
+    except (TypeError, ValueError, IndexError):
+        return month
+
+
+def _pct(part, whole) -> int:
+    """part/whole as a whole percentage clamped to 0-100, for progress bars (0 when whole <= 0)."""
+    if not whole or whole <= 0 or not part or part <= 0:
+        return 0
+    return max(0, min(100, round(part * 100 / whole)))
+
+
 def create_app(cfg: dict) -> Flask:
     """Create and configure the Flask application."""
     app = Flask(__name__)
@@ -191,6 +207,8 @@ def create_app(cfg: dict) -> Flask:
     app.jinja_env.filters["money"] = calc.format_money
     app.jinja_env.filters["hours"] = calc.format_hours
     app.jinja_env.filters["percent"] = calc.format_percent_bp
+    app.jinja_env.filters["month_label"] = _month_label
+    app.jinja_env.globals["pct"] = _pct
 
     # Request database teardown
     @app.teardown_appcontext

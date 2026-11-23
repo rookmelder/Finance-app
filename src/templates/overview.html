@@ -1,129 +1,133 @@
 {% extends "base.html" %}
+{% from "_icons.html" import icon %}
 {% block title %}Overview ({{ month }}) - Finance{% endblock %}
 {% block content %}
 <div class="month-navigation">
-  <a href="{{ url_for('overview', month=prev_month) }}" class="nav-arrow">&larr; {{ prev_month }}</a>
-  <h1>{{ month }}</h1>
-  <a href="{{ url_for('overview', month=next_month) }}" class="nav-arrow">{{ next_month }} &rarr;</a>
+  <a href="{{ url_for('overview', month=prev_month) }}" class="nav-arrow" aria-label="Previous month ({{ prev_month }})">{{ icon('prev') }}</a>
+  <div class="month-title">
+    <h1>{{ month | month_label }}</h1>
+    <div class="month-sub">Pay month · <time datetime="{{ month }}">{{ month }}</time></div>
+  </div>
+  <a href="{{ url_for('overview', month=next_month) }}" class="nav-arrow" aria-label="Next month ({{ next_month }})">{{ icon('next') }}</a>
 </div>
 
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
+{% set pool = free_available + free_spent %}
 <section class="card spend-card">
   <h2>You can spend</h2>
-  <div class="big-number {% if free_available < 0 %}neg{% endif %}">
-    {{ free_available | money }}
+  <div class="big-number {% if free_available < 0 %}neg{% endif %}">{{ free_available | money }}</div>
+  <div class="bar bar-lg bar-accent{% if free_available < 0 %} is-over{% endif %}" role="img" aria-label="{{ free_spent | money }} spent of {{ pool | money }}">
+    <span style="width: {{ 100 if free_available < 0 else pct(free_spent, pool) }}%"></span>
   </div>
+  <div class="bar-caption"><span>{{ free_spent | money }} spent</span><span>of {{ pool | money }}</span></div>
   <div class="spend-breakdown">
     <div class="stat">
-      <span class="label">Free budget:</span>
+      <span class="label">Budget</span>
       <span class="value">{{ free_budget | money }}</span>
     </div>
     <div class="stat">
-      <span class="label">Carry-in:</span>
+      <span class="label">Carry-in</span>
       <span class="value {% if carry_in < 0 %}neg{% endif %}">{{ carry_in | money }}</span>
     </div>
     <div class="stat">
-      <span class="label">Spent:</span>
+      <span class="label">Spent</span>
       <span class="value">{{ free_spent | money }}</span>
     </div>
   </div>
 </section>
 
 <section class="card">
-  <h2>Income</h2>
+  <div class="card-head">
+    <h2>Income</h2>
+    {% if income_row %}<span class="badge {% if income_used == 'actual' %}badge-actual{% else %}badge-estimate{% endif %}">Using {{ income_used }}</span>{% endif %}
+  </div>
   {% if income_row %}
-    <div class="stat-grid">
-      <div class="stat">
-        <span class="label">Estimate:</span>
+    <div class="stat-grid cols-2">
+      <div class="stat{% if income_used == 'estimate' %} highlight-stat{% endif %}">
+        <span class="label">Estimate</span>
         <span class="value">{{ estimate | money }}</span>
       </div>
-      <div class="stat">
-        <span class="label">Actual:</span>
+      <div class="stat{% if income_used == 'actual' %} highlight-stat{% endif %}">
+        <span class="label">Actual</span>
         <span class="value">
-          {% if income_row.actual_cents is not none %}
-            {{ income_row.actual_cents | money }}
-          {% else %}
-            —
-          {% endif %}
+          {% if income_row.actual_cents is not none %}{{ income_row.actual_cents | money }}{% else %}—{% endif %}
         </span>
       </div>
-      <div class="stat">
-        <span class="label">Used:</span>
-        <span class="value"><strong>{{ income_amount | money }}</strong> ({{ income_used }})</span>
-      </div>
     </div>
-    {% include "_breakdown.html" %}
+    <details class="disclosure">
+      <summary>Show breakdown</summary>
+      {% include "_breakdown.html" %}
+    </details>
     <div class="card-links">
-      <a href="{{ url_for('income_edit', pay_month=month) }}">Edit Income</a>
+      <a href="{{ url_for('income_edit', pay_month=month) }}">Edit income →</a>
     </div>
   {% else %}
-    <p>No income recorded for this month.</p>
+    <p class="empty">No income recorded for this month.</p>
     <div class="card-links">
-      <a href="{{ url_for('income') }}">Add Income</a>
+      <a href="{{ url_for('income') }}">Add income →</a>
     </div>
   {% endif %}
 </section>
 
 <section class="card">
-  <h2>Budget Split</h2>
-  <div class="stat-grid">
-    <div class="stat">
-      <span class="label">Needs:</span>
+  <div class="card-head">
+    <h2>Budget split</h2>
+    <span class="meta">{{ income_amount | money }}</span>
+  </div>
+  <div class="bar bar-lg" role="img" aria-label="Needs {{ needs | money }}, free spend {{ free_budget | money }}, savings {{ savings_budget | money }}">
+    <span class="seg-needs" style="width: {{ pct(needs, income_amount) }}%"></span>
+    <span class="seg-free" style="width: {{ pct(free_budget, income_amount) }}%"></span>
+    <span class="seg-savings" style="width: {{ pct(savings_budget, income_amount) }}%"></span>
+  </div>
+  <div class="legend">
+    <div class="legend-item">
+      <span class="label"><i class="dot dot-needs"></i>Needs</span>
       <span class="value">{{ needs | money }}</span>
     </div>
-    <div class="stat">
-      <span class="label">Free spend:</span>
+    <div class="legend-item">
+      <span class="label"><i class="dot dot-free"></i>Free spend</span>
       <span class="value">{{ free_budget | money }}</span>
     </div>
-    <div class="stat">
-      <span class="label">Savings:</span>
+    <div class="legend-item">
+      <span class="label"><i class="dot dot-savings"></i>Savings</span>
       <span class="value">{{ savings_budget | money }}</span>
     </div>
   </div>
 </section>
 
 <section class="card">
-  <h2>Needs &amp; Fixed Costs</h2>
-  <div class="stat-grid">
-    <div class="stat">
-      <span class="label">Needs budget:</span>
-      <span class="value">{{ needs | money }}</span>
-    </div>
-    <div class="stat">
-      <span class="label">Fixed costs:</span>
-      <span class="value">{{ fixed_total | money }}</span>
-    </div>
-    <div class="stat">
-      <span class="label">After fixed:</span>
-      <span class="value {% if needs_after_fixed < 0 %}neg{% endif %}">{{ needs_after_fixed | money }}</span>
-    </div>
-    <div class="stat">
-      <span class="label">Spent:</span>
-      <span class="value">{{ needs_spent | money }}</span>
-    </div>
-    <div class="stat highlight-stat">
-      <span class="label">Needs left:</span>
-      <span class="value {% if needs_left < 0 %}neg{% endif %}"><strong>{{ needs_left | money }}</strong></span>
-    </div>
+  <div class="card-head">
+    <h2><i class="dot dot-needs"></i>Needs &amp; fixed costs</h2>
+    <span class="meta">{{ needs | money }}</span>
+  </div>
+  {% set f_pct = pct(fixed_total, needs) %}
+  {% set s_pct = [pct(needs_spent, needs), 100 - f_pct] | min %}
+  <div class="bar{% if needs_left < 0 %} is-over{% endif %}" role="img" aria-label="Fixed costs {{ fixed_total | money }} and spent {{ needs_spent | money }} of {{ needs | money }}">
+    <span class="seg-needs" style="width: {{ 100 if needs_left < 0 else f_pct }}%"></span>
+    {% if needs_left >= 0 %}<span class="seg-needs-soft" style="width: {{ s_pct }}%"></span>{% endif %}
+  </div>
+  <div class="rows">
+    <div class="row"><span class="label">Needs budget</span><span class="value">{{ needs | money }}</span></div>
+    <div class="row"><span class="label">Fixed costs</span><span class="value">{{ fixed_total | money }}</span></div>
+    <div class="row row-sub"><span class="label">After fixed</span><span class="value {% if needs_after_fixed < 0 %}neg{% endif %}">{{ needs_after_fixed | money }}</span></div>
+    <div class="row"><span class="label">Spent</span><span class="value">{{ needs_spent | money }}</span></div>
+    <div class="row row-total"><span class="label">Needs left</span><span class="value {% if needs_left < 0 %}neg{% endif %}">{{ needs_left | money }}</span></div>
   </div>
 </section>
 
 <section class="card">
-  <h2>Savings</h2>
-  <div class="stat-grid">
-    <div class="stat">
-      <span class="label">Savings budget:</span>
-      <span class="value">{{ savings_budget | money }}</span>
-    </div>
-    <div class="stat">
-      <span class="label">Savings logged:</span>
-      <span class="value">{{ savings_spent | money }}</span>
-    </div>
-    <div class="stat">
-      <span class="label">Difference:</span>
-      <span class="value {% if savings_diff < 0 %}neg{% endif %}">{{ savings_diff | money }}</span>
-    </div>
+  <div class="card-head">
+    <h2><i class="dot dot-savings"></i>Savings</h2>
+    <span class="meta">{{ savings_budget | money }}</span>
+  </div>
+  <div class="bar" role="img" aria-label="{{ savings_spent | money }} saved of {{ savings_budget | money }}">
+    <span class="seg-savings" style="width: {{ pct(savings_spent, savings_budget) }}%"></span>
+  </div>
+  <div class="rows">
+    <div class="row"><span class="label">Savings budget</span><span class="value">{{ savings_budget | money }}</span></div>
+    <div class="row"><span class="label">Savings logged</span><span class="value">{{ savings_spent | money }}</span></div>
+    <div class="row row-total"><span class="label">Difference</span><span class="value {% if savings_diff < 0 %}neg{% endif %}">{{ savings_diff | money }}</span></div>
   </div>
 </section>
 {% endblock %}
