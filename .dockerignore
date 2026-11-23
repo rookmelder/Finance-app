@@ -1,0 +1,11 @@
+.git
+.env
+.worker
+data
+tests
+agent
+knowledge
+templates
+.venv
+__pycache__
+*.pyc

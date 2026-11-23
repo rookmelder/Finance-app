@@ -1,0 +1,13 @@
+services:
+  finance:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env          # FINANCE_PASSWORD and SECRET_KEY (never committed)
+    volumes:
+      - finance-data:/data
+
+volumes:
+  finance-data:
