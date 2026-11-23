@@ -241,7 +241,7 @@
       return;
     }
 
-    setStatus("Saved");
+    setStatus(result.gcal === "error" ? "Saved, but Google Calendar was not updated (see Settings)" : "Saved");
     renderSummary(result);
     if (editLink && result.rows && result.rows.length > 0) {
       editLink.hidden = false;

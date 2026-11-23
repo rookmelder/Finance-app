@@ -2,7 +2,9 @@
 
 import calendar
 import datetime
+import hmac
 import os
+import secrets
 import sys
 from flask import (
     Flask,
@@ -13,9 +15,10 @@ from flask import (
     redirect,
     render_template,
     request,
+    session,
     url_for,
 )
-from src import auth, calc, config, db
+from src import auth, calc, config, db, gcal
 
 
 def get_db():
@@ -60,6 +63,85 @@ def _estimate(conn, row) -> dict:
         sunday_premium_cents=row["sunday_premium_cents"],
         rsz_bp=row["rsz_bp"],
     )
+
+
+GOOGLE_MESSAGES = {
+    "connected": ("ok", "Google Calendar connected. Your worked days are being added to the \"Work\" calendar."),
+    "connected_error": ("error", "Connected, but the first sync failed. See the error below and try Sync now."),
+    "denied": ("error", "Google access was not given."),
+    "badstate": ("error", "That Google sign-in link was old or not started here. Try Connect again."),
+    "failed": ("error", "Google sign-in failed. Check the client id, secret and redirect URI, then try again."),
+    "synced": ("ok", "All months synced to Google Calendar."),
+    "syncfailed": ("error", "Sync failed. See the error below."),
+    "disconnected": ("ok", "Google Calendar disconnected. Events already in the \"Work\" calendar stay there."),
+}
+
+
+def _gcal_configured() -> bool:
+    cfg = current_app.config
+    return bool(cfg.get("GOOGLE_CLIENT_ID") and cfg.get("GOOGLE_CLIENT_SECRET") and cfg.get("GOOGLE_REDIRECT_URI"))
+
+
+def _gcal_transport():
+    return current_app.config.get("GCAL_TRANSPORT") or gcal.urllib_transport
+
+
+def _gcal_sync(conn, months):
+    """Push the worked days of these work months to Google. Returns None (not connected), "ok" or "error".
+
+    Never raises for Google problems: the error is stored and shown in Settings.
+    """
+    if not _gcal_configured():
+        return None
+    cfg = current_app.config
+    with gcal.sync_lock:
+        row = db.get_google(conn)  # read inside the lock: another save may have just created the calendar
+        if row is None:
+            return None
+        client = gcal.Client(cfg["GOOGLE_CLIENT_ID"], cfg["GOOGLE_CLIENT_SECRET"], row["refresh_token"],
+                             _gcal_transport())
+        try:
+            cal_id = row["calendar_id"]
+            if not cal_id:
+                cal_id = client.create_calendar()
+                db.update_google(conn, calendar_id=cal_id)
+            todo = list(dict.fromkeys(months))
+            recreated = False
+            i = 0
+            while i < len(todo):
+                try:
+                    gcal.sync_month(client, cal_id, todo[i], db.list_days(conn, todo[i]))
+                    i += 1
+                except gcal.GcalError as err:
+                    if err.status != 404 or recreated:
+                        raise
+                    # The "Work" calendar was deleted in Google: make a new one and push every month again.
+                    cal_id = client.create_calendar()
+                    db.update_google(conn, calendar_id=cal_id)
+                    recreated = True
+                    todo = list(dict.fromkeys(db.worked_months(conn) + todo))
+                    i = 0
+            db.update_google(conn, last_sync=datetime.datetime.now().isoformat(timespec="seconds"), last_error=None)
+            return "ok"
+        except gcal.GcalError as err:
+            db.update_google(conn, last_error=str(err)[:300])
+            return "error"
+        except Exception as err:  # never let a Google problem break saving
+            current_app.logger.warning("Google sync failed: %s", type(err).__name__)
+            db.update_google(conn, last_error="Unexpected error talking to Google (" + type(err).__name__ + ")")
+            return "error"
+
+
+def _google_view(conn):
+    msg = GOOGLE_MESSAGES.get(request.args.get("google", ""))
+    row = db.get_google(conn) if _gcal_configured() else None
+    return {
+        "configured": _gcal_configured(),
+        "connected": row is not None,
+        "last_sync": row["last_sync"] if row else None,
+        "last_error": row["last_error"] if row else None,
+        "message": msg,
+    }
 
 
 def _breakdown_rows(b: dict) -> list:
@@ -422,6 +504,7 @@ def create_app(cfg: dict) -> Flask:
                     return redirect(url_for("income_edit", pay_month=pay_month), code=303)
                 elif action == "delete":
                     db.delete_income(conn, pay_month)
+                    _gcal_sync(conn, [income_row["work_month"]])
                     return redirect(url_for("income"), code=303)
                 else:
                     raise ValueError(f"Invalid action: {action!r}")
@@ -613,11 +696,13 @@ def create_app(cfg: dict) -> Flask:
         except ValueError as err:
             return jsonify(ok=False, error=str(err)), 400
         pay_m = calc.pay_month(work_month)
+        synced = _gcal_sync(conn, [work_month])
         if row is None:
-            return jsonify(ok=True, pay_month=pay_m, days=0, sundays=0, total=calc.format_money(0), rows=[])
+            return jsonify(ok=True, pay_month=pay_m, days=0, sundays=0, total=calc.format_money(0), rows=[],
+                           gcal=synced)
         b = _estimate(conn, row)
         return jsonify(ok=True, pay_month=pay_m, days=b["days"], sundays=b["sundays"],
-                       total=calc.format_money(b["total"]), rows=_breakdown_rows(b))
+                       total=calc.format_money(b["total"]), rows=_breakdown_rows(b), gcal=synced)
 
     # 6. Settings
     @app.route("/settings", methods=["GET", "POST"])
@@ -666,10 +751,64 @@ def create_app(cfg: dict) -> Flask:
                 return redirect(url_for("settings"), code=303)
             except ValueError as err:
                 current_settings = db.get_settings(conn)
-                return render_template("settings.html", settings=current_settings, error=str(err)), 400
+                return render_template("settings.html", settings=current_settings, error=str(err),
+                                       google=_google_view(conn)), 400
 
         current_settings = db.get_settings(conn)
-        return render_template("settings.html", settings=current_settings)
+        return render_template("settings.html", settings=current_settings, google=_google_view(conn))
+
+    # 7. Google Calendar sync
+    def _to_settings(code):
+        return redirect(url_for("settings", google=code) + "#google", code=303)
+
+    @app.route("/google/connect", methods=["POST"])
+    def google_connect():
+        if not _gcal_configured():
+            abort(404)
+        state = secrets.token_urlsafe(32)
+        session["gcal_state"] = state
+        return redirect(gcal.auth_url(app.config["GOOGLE_CLIENT_ID"], app.config["GOOGLE_REDIRECT_URI"], state), code=303)
+
+    @app.route("/google/callback")
+    def google_callback():
+        if not _gcal_configured():
+            abort(404)
+        expected = session.pop("gcal_state", None)
+        got = request.args.get("state", "")
+        if not expected or not hmac.compare_digest(expected.encode(), got.encode()):
+            return _to_settings("badstate")
+        if request.args.get("error") or not request.args.get("code"):
+            return _to_settings("denied")
+        try:
+            refresh = gcal.exchange_code(app.config["GOOGLE_CLIENT_ID"], app.config["GOOGLE_CLIENT_SECRET"],
+                                         app.config["GOOGLE_REDIRECT_URI"], request.args["code"], _gcal_transport())
+        except gcal.GcalError:
+            return _to_settings("failed")
+        conn = get_db()
+        db.connect_google(conn, refresh)
+        result = _gcal_sync(conn, db.worked_months(conn))
+        return _to_settings("connected" if result == "ok" else "connected_error")
+
+    @app.route("/google/sync", methods=["POST"])
+    def google_sync():
+        if not _gcal_configured():
+            abort(404)
+        conn = get_db()
+        if db.get_google(conn) is None:
+            return _to_settings("syncfailed")
+        result = _gcal_sync(conn, db.worked_months(conn))
+        return _to_settings("synced" if result == "ok" else "syncfailed")
+
+    @app.route("/google/disconnect", methods=["POST"])
+    def google_disconnect():
+        if not _gcal_configured():
+            abort(404)
+        conn = get_db()
+        row = db.get_google(conn)
+        if row is not None:
+            gcal.revoke(row["refresh_token"], _gcal_transport())
+            db.delete_google(conn)
+        return _to_settings("disconnected")
 
     return app
 

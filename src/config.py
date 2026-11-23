@@ -1,5 +1,6 @@
 """Runtime configuration, read from environment variables. Secrets are never stored in code."""
 import os
+import urllib.parse
 
 
 class ConfigError(RuntimeError):
@@ -21,7 +22,17 @@ def load(env=None):
         raise ConfigError("FINANCE_PORT must be a number")
     if not 1 <= port <= 65535:
         raise ConfigError("FINANCE_PORT must be 1-65535")
+    google = {k: env.get(k, "").strip() for k in ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI")}
+    if any(google.values()) and not all(google.values()):
+        raise ConfigError("Set all of GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI, or none")
+    uri = google["GOOGLE_REDIRECT_URI"]
+    if uri:
+        parts = urllib.parse.urlsplit(uri)
+        local = parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1")
+        if not (parts.scheme == "https" and parts.hostname) and not local:
+            raise ConfigError("GOOGLE_REDIRECT_URI must be an https:// address")
     return {
+        **google,
         "PASSWORD": password,
         "SECRET_KEY": secret,
         "PORT": port,

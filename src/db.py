@@ -104,6 +104,15 @@ def connect(path: str) -> sqlite3.Connection:
                 note TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS google_sync (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                refresh_token TEXT NOT NULL,
+                calendar_id TEXT NULL,
+                last_sync TEXT NULL,
+                last_error TEXT NULL
+            )
+        """)
         # Migrate databases made before these columns existed
         _add_missing_columns(conn, "settings", {
             "clothing_cents": "INTEGER NOT NULL DEFAULT 0",
@@ -561,3 +570,44 @@ def spent_by_month(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
             result[m] = {"needs": 0, "free": 0, "savings": 0}
         result[m][r["bucket"]] = r["total"]
     return result
+
+
+# --- Google Calendar connection (one row, id = 1) ---
+
+def get_google(conn: sqlite3.Connection) -> Optional[dict[str, Any]]:
+    row = conn.execute("SELECT * FROM google_sync WHERE id = 1").fetchone()
+    return dict(row) if row else None
+
+
+def connect_google(conn: sqlite3.Connection, refresh_token: str) -> None:
+    """Store a new refresh token; keeps an existing calendar id, clears the error."""
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise ValueError("refresh_token must be a non-empty string")
+    with conn:
+        conn.execute("""
+            INSERT INTO google_sync (id, refresh_token) VALUES (1, ?)
+            ON CONFLICT(id) DO UPDATE SET refresh_token = excluded.refresh_token, last_error = NULL
+        """, (refresh_token,))
+
+
+def update_google(conn: sqlite3.Connection, **fields) -> None:
+    allowed = {"calendar_id", "last_sync", "last_error"}
+    for k in fields:
+        if k not in allowed:
+            raise ValueError(f"Unknown google field: {k}")
+    if not fields:
+        return
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with conn:
+        conn.execute(f"UPDATE google_sync SET {sets} WHERE id = 1", tuple(fields.values()))
+
+
+def delete_google(conn: sqlite3.Connection) -> None:
+    with conn:
+        conn.execute("DELETE FROM google_sync WHERE id = 1")
+
+
+def worked_months(conn: sqlite3.Connection) -> list[str]:
+    """Every YYYY-MM that has at least one worked day, oldest first."""
+    rows = conn.execute("SELECT DISTINCT substr(date, 1, 7) AS m FROM work_days ORDER BY m").fetchall()
+    return [r["m"] for r in rows]

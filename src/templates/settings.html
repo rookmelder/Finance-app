@@ -78,4 +78,37 @@
 
   <button type="submit">Save settings</button>
 </form>
+
+{% if google %}
+<section class="card google-card" id="google">
+  <div class="card-head">
+    <h2>Google Calendar</h2>
+    {% if google.connected %}<span class="badge badge-active">Connected</span>{% endif %}
+  </div>
+  {% if google.message %}<p class="{{ 'notice' if google.message[0] == 'ok' else 'error' }}">{{ google.message[1] }}</p>{% endif %}
+  {% if not google.configured %}
+  <p class="help-text">Not set up yet. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI to the server's .env file and restart the app.</p>
+  {% elif not google.connected %}
+  <p class="help-text">Put every day you work into a separate "Work" calendar in your Google Calendar, automatically. The app can only see and change that one calendar.</p>
+  <form method="post" action="{{ url_for('google_connect') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">Connect Google Calendar</button>
+  </form>
+  {% else %}
+  <p class="help-text">Worked days are copied to the "Work" calendar each time you save the calendar.
+    {% if google.last_sync %}Last sync: {{ google.last_sync.replace('T', ' ') }}.{% endif %}</p>
+  {% if google.last_error %}<p class="error">Last sync failed: {{ google.last_error }}</p>{% endif %}
+  <div class="google-actions">
+    <form method="post" action="{{ url_for('google_sync') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit">Sync all months now</button>
+    </form>
+    <form method="post" action="{{ url_for('google_disconnect') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-secondary">Disconnect</button>
+    </form>
+  </div>
+  {% endif %}
+</section>
+{% endif %}
 {% endblock %}
