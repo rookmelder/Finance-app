@@ -1,0 +1,13 @@
+[Unit]
+Description=Finance app
+After=network.target
+
+[Service]
+Type=simple
+User=webserver
+WorkingDirectory=/home/webserver/Multi-Agent
+ExecStart=/home/webserver/Multi-Agent/run.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

@@ -29,8 +29,11 @@ def csrf_token():
 
 
 def _too_many_fails(ip, now):
+    for key in [k for k, v in _fails.items() if all(now - t >= FAIL_WINDOW for t in v)]:
+        del _fails[key]  # forget clients whose failures have all expired
     recent = [t for t in _fails.get(ip, []) if now - t < FAIL_WINDOW]
-    _fails[ip] = recent
+    if recent:
+        _fails[ip] = recent
     return len(recent) >= MAX_FAILS
 
 

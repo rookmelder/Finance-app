@@ -13,8 +13,8 @@ def load(env=None):
     secret = env.get("SECRET_KEY", "")
     if not password:
         raise ConfigError("FINANCE_PASSWORD is not set")
-    if len(secret) < 16:
-        raise ConfigError("SECRET_KEY must be set and at least 16 characters")
+    if len(secret) < 32:
+        raise ConfigError("SECRET_KEY must be set and at least 32 characters")
     try:
         port = int(env.get("FINANCE_PORT", "8080"))
     except ValueError:

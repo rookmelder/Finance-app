@@ -96,7 +96,7 @@ class AuthTests(unittest.TestCase):
 class ConfigTests(unittest.TestCase):
     def test_missing_password(self):
         with self.assertRaises(config.ConfigError):
-            config.load({"SECRET_KEY": "x" * 20})
+            config.load({"SECRET_KEY": "x" * 32})
 
     def test_short_secret(self):
         with self.assertRaises(config.ConfigError):
@@ -104,10 +104,10 @@ class ConfigTests(unittest.TestCase):
 
     def test_bad_port(self):
         with self.assertRaises(config.ConfigError):
-            config.load({"FINANCE_PASSWORD": "a", "SECRET_KEY": "x" * 20, "FINANCE_PORT": "abc"})
+            config.load({"FINANCE_PASSWORD": "a", "SECRET_KEY": "x" * 32, "FINANCE_PORT": "abc"})
 
     def test_ok(self):
-        c = config.load({"FINANCE_PASSWORD": "a", "SECRET_KEY": "x" * 20})
+        c = config.load({"FINANCE_PASSWORD": "a", "SECRET_KEY": "x" * 32})
         self.assertEqual(c["PORT"], 8080)
 
 
