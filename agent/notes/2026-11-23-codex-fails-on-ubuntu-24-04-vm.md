@@ -1,5 +1,7 @@
 # Codex workers fail on Ubuntu 24.04 (AppArmor blocks bwrap)
 
+> Codex exits 6 on every run here because AppArmor blocks its sandbox; use agy only until a sudo fix.
+
 Every Codex run exits 6 at once: `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`.
 Cause: `kernel.apparmor_restrict_unprivileged_userns = 1` (Ubuntu 24.04 default), so Codex's sandbox helper cannot create a user/network namespace. `unshare -Urn true` fails the same way.
 
