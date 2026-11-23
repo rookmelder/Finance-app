@@ -40,21 +40,21 @@ def parse_money(text: str) -> int       # "14.50" -> 1450, "14,5" -> 1450, "14" 
 def parse_hours(text: str) -> int       # "7.5" -> 450, "7,5" -> 450, "8" -> 480 (minutes); ValueError if invalid/negative
 def format_money(cents: int) -> str     # 196200 -> "€1,962.00", -5 -> "-€0.05"
 def format_hours(minutes: int) -> str   # 450 -> "7.5", 480 -> "8", 465 -> "7.75"
-def budget_chain(income_by_month: dict[str, int], percents: tuple[int, int, int],
-                 spent_free_by_month: dict[str, int], carry_over: bool, months: list[str]) -> dict[str, dict]
+def budget_chain(budget_by_month: dict[str, tuple[int, int, int]],
+                 spent_free_by_month: dict[str, int], carry_over: bool,
+                 months: list[str]) -> dict[str, dict]
 ```
-`budget_chain`: for each month in `months` (ascending, consecutive) returns `{"income", "needs", "free", "savings", "carry_in", "free_available", "free_left"}`.
-income = `income_by_month.get(m, 0)`; (needs, free, savings) = `split_income`; `carry_in` = previous month's `free_left` if `carry_over` and not the first month, else 0 (can be negative);
-`free_available = free + carry_in - spent_free`; `free_left = free_available`. (First month in `months` has carry_in 0, so the caller passes months starting at the first month that has income.)
-The 50% leftover never carries over. Per-month percents are the snapshot stored on that month's income; `budget_chain` takes ONE percents tuple for simplicity, so the caller instead passes `income_by_month` values already split: change signature to
-`budget_chain(budget_by_month: dict[str, tuple[int,int,int]], spent_free_by_month, carry_over, months)` where each value is `(needs, free, savings)` for that month (missing month = (0,0,0)).
+`budget_chain`: `budget_by_month[m]` = `(needs, free, savings)` already split for that month (missing month = (0,0,0)). For each month in `months` (ascending, consecutive) it returns `{"free", "carry_in", "spent_free", "free_available"}`:
+`carry_in` = previous month's `free_available` if `carry_over` and the month is not the first in `months`, else 0 (may be negative);
+`spent_free` = `spent_free_by_month.get(m, 0)`; `free_available = free + carry_in - spent_free` (this is what I can still spend, and it is what carries into the next month).
+The 50% leftover never carries over. The caller passes `months` starting at the first pay month that has income.
 
 ### Golden examples (tests MUST include these)
 1. rate 1400, 450 min/day, 18 days, allowance 400 -> `estimate_cents == 196200` (hours 189000 + allowance 7200). `split_income(196200,50,20,30) == (98100, 39240, 58860)`.
 2. rounding: rate 1337, 450 min/day, 3 days, allowance 333 -> 30083 + 999 = **31082**. `split_income(31082,50,20,30) == (15541, 6216, 9325)`.
 3. override: rate 1400, minutes_override 8040, days 18, allowance 400 -> 187600 + 7200 = **194800**.
 4. `monthly_set_aside(2999, 3) == 1000`; `monthly_set_aside(1200, 12) == 100`; `monthly_set_aside(999, 1) == 999`.
-5. carry-over chain: months ["2026-12","2027-01"], budgets {"2026-12": (98100,39240,58860), "2027-01": (0,40000,0)}, spent free {"2026-12": 10000, "2027-01": 5000}, carry_over True -> Dec free_left 29240; Jan carry_in 29240, free_available 64240. With carry_over False -> Jan carry_in 0, free_available 35000. Negative: spent 50000 in Dec -> Dec free_left -10760, Jan carry_in -10760.
+5. carry-over chain: months ["2026-12","2027-01"], budgets {"2026-12": (98100,39240,58860), "2027-01": (0,40000,0)}, spent free {"2026-12": 10000, "2027-01": 5000}, carry_over True -> Dec free_available 29240; Jan carry_in 29240, free_available 64240. With carry_over False -> Jan carry_in 0, free_available 35000. Negative: spent 50000 in Dec -> Dec free_available -10760, Jan carry_in -10760.
 6. `pay_month("2026-12") == "2027-01"`; `month_range("2026-11","2027-01") == ["2026-11","2026-12","2027-01"]`.
 
 ## Database (db.py, SQLite, file path passed in, `:memory:` allowed)
@@ -71,7 +71,7 @@ Functions (all take `conn` first; return dicts or lists of dicts; raise `ValueEr
 `save_income(conn, work_month, days, minutes_override=None, refresh_snapshot=False)` (pay_month = calc.pay_month(work_month); creates with snapshot of current settings; on an existing pay_month updates days/override and only re-snapshots if `refresh_snapshot`), `set_actual(conn, pay_month, actual_cents_or_None)`, `get_income(conn, pay_month)`, `list_income(conn)` (newest pay_month first), `delete_income`;
 `add_recurring/update_recurring/delete_recurring/list_recurring(conn, only_active=False)/get_recurring`;
 `add_expense/delete_expense/list_expenses(conn, month=None)/spent_by_month(conn) -> dict[str, dict[str,int]]` (month -> bucket -> cents).
-Derived values live in a function `income_view(row) -> dict` in calc.py-free helper `src/views.py`... NO: put it in app code; db.py only stores.
+db.py only stores data; all derived numbers come from calc.py.
 
 ## Overview page logic (app.py, uses calc + db)
 For selected pay month M (default: current calendar month):
