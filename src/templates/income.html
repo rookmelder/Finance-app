@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Income - Finance{% endblock %}
+{% block content %}
+<h1>Income</h1>
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <h2>Log Monthly Income</h2>
+  <form method="post" action="{{ url_for('income') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    
+    <label>Work Month:
+      <input type="month" name="work_month" value="{{ default_wm }}" required>
+    </label>
+    <p class="help-text">Pay month will be <strong>{{ default_pm }}</strong> (next month).</p>
+
+    <label>Days worked:
+      <input type="number" name="days" value="18" min="0" max="31" required>
+    </label>
+
+    <label>Total hours override (optional):
+      <input type="text" name="hours_override" placeholder="e.g. 135 or 7.5">
+    </label>
+
+    <button type="submit">Add Income</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Income History</h2>
+  <div class="table-responsive">
+    <table>
+      <thead>
+        <tr>
+          <th>Pay Month</th>
+          <th>Work Month</th>
+          <th>Days</th>
+          <th>Estimate</th>
+          <th>Actual</th>
+          <th>Used</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for inc in incomes %}
+        <tr>
+          <td><strong>{{ inc.pay_month }}</strong></td>
+          <td>{{ inc.work_month }}</td>
+          <td>{{ inc.days }}</td>
+          <td>{{ inc.estimate | money }}</td>
+          <td>{% if inc.actual_cents is not none %}{{ inc.actual_cents | money }}{% else %}-{% endif %}</td>
+          <td><span class="badge badge-{{ inc.used }}">{{ inc.used }}</span></td>
+          <td><a href="{{ url_for('income_edit', pay_month=inc.pay_month) }}">Edit</a></td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7">No income records yet.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

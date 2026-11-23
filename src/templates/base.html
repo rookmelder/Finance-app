@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Finance{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-container">
+      <span class="app-title"><a href="{{ url_for('overview') }}">Finance</a></span>
+      <form method="post" action="{{ url_for('logout') }}" class="logout-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="btn-logout">Log out</button>
+      </form>
+    </div>
+    <nav class="top-nav">
+      <a href="{{ url_for('overview') }}" class="{% if request.endpoint == 'overview' %}active{% endif %}">Overview</a>
+      <a href="{{ url_for('income') }}" class="{% if request.endpoint in ('income', 'income_edit') %}active{% endif %}">Income</a>
+      <a href="{{ url_for('costs') }}" class="{% if request.endpoint == 'costs' %}active{% endif %}">Costs</a>
+      <a href="{{ url_for('expenses') }}" class="{% if request.endpoint == 'expenses' %}active{% endif %}">Expenses</a>
+      <a href="{{ url_for('settings') }}" class="{% if request.endpoint == 'settings' %}active{% endif %}">Settings</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <nav class="bottom-nav">
+    <a href="{{ url_for('overview') }}" class="{% if request.endpoint == 'overview' %}active{% endif %}">Overview</a>
+    <a href="{{ url_for('income') }}" class="{% if request.endpoint in ('income', 'income_edit') %}active{% endif %}">Income</a>
+    <a href="{{ url_for('costs') }}" class="{% if request.endpoint == 'costs' %}active{% endif %}">Costs</a>
+    <a href="{{ url_for('expenses') }}" class="{% if request.endpoint == 'expenses' %}active{% endif %}">Expenses</a>
+    <a href="{{ url_for('settings') }}" class="{% if request.endpoint == 'settings' %}active{% endif %}">Settings</a>
+  </nav>
+</body>
+</html>

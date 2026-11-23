@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Overview ({{ month }}) - Finance{% endblock %}
+{% block content %}
+<div class="month-navigation">
+  <a href="{{ url_for('overview', month=prev_month) }}" class="nav-arrow">&larr; {{ prev_month }}</a>
+  <h1>{{ month }}</h1>
+  <a href="{{ url_for('overview', month=next_month) }}" class="nav-arrow">{{ next_month }} &rarr;</a>
+</div>
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<section class="card spend-card">
+  <h2>You can spend</h2>
+  <div class="big-number {% if free_available < 0 %}neg{% endif %}">
+    {{ free_available | money }}
+  </div>
+  <div class="spend-breakdown">
+    <div class="stat">
+      <span class="label">Free budget:</span>
+      <span class="value">{{ free_budget | money }}</span>
+    </div>
+    <div class="stat">
+      <span class="label">Carry-in:</span>
+      <span class="value {% if carry_in < 0 %}neg{% endif %}">{{ carry_in | money }}</span>
+    </div>
+    <div class="stat">
+      <span class="label">Spent:</span>
+      <span class="value">{{ free_spent | money }}</span>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Income</h2>
+  {% if income_row %}
+    <div class="stat-grid">
+      <div class="stat">
+        <span class="label">Estimate:</span>
+        <span class="value">{{ estimate | money }}</span>
+      </div>
+      <div class="stat">
+        <span class="label">Actual:</span>
+        <span class="value">
+          {% if income_row.actual_cents is not none %}
+            {{ income_row.actual_cents | money }}
+          {% else %}
+            —
+          {% endif %}
+        </span>
+      </div>
+      <div class="stat">
+        <span class="label">Used:</span>
+        <span class="value"><strong>{{ income_amount | money }}</strong> ({{ income_used }})</span>
+      </div>
+    </div>
+    <div class="card-links">
+      <a href="{{ url_for('income_edit', pay_month=month) }}">Edit Income</a>
+    </div>
+  {% else %}
+    <p>No income recorded for this month.</p>
+    <div class="card-links">
+      <a href="{{ url_for('income') }}">Add Income</a>
+    </div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Budget Split</h2>
+  <div class="stat-grid">
+    <div class="stat">
+      <span class="label">Needs:</span>
+      <span class="value">{{ needs | money }}</span>
+    </div>
+    <div class="stat">
+      <span class="label">Free spend:</span>
+      <span class="value">{{ free_budget | money }}</span>
+    </div>
+    <div class="stat">
+      <span class="label">Savings:</span>
+      <span class="value">{{ savings_budget | money }}</span>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Needs &amp; Fixed Costs</h2>
+  <div class="stat-grid">
+    <div class="stat">
+      <span class="label">Needs budget:</span>
+      <span class="value">{{ needs | money }}</span>
+    </div>
+    <div class="stat">
+      <span class="label">Fixed costs:</span>
+      <span class="value">{{ fixed_total | money }}</span>
+    </div>
+    <div class="stat">
+      <span class="label">After fixed:</span>
+      <span class="value {% if needs_after_fixed < 0 %}neg{% endif %}">{{ needs_after_fixed | money }}</span>
+    </div>
+    <div class="stat">
+      <span class="label">Spent:</span>
+      <span class="value">{{ needs_spent | money }}</span>
+    </div>
+    <div class="stat highlight-stat">
+      <span class="label">Needs left:</span>
+      <span class="value {% if needs_left < 0 %}neg{% endif %}"><strong>{{ needs_left | money }}</strong></span>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Savings</h2>
+  <div class="stat-grid">
+    <div class="stat">
+      <span class="label">Savings budget:</span>
+      <span class="value">{{ savings_budget | money }}</span>
+    </div>
+    <div class="stat">
+      <span class="label">Savings logged:</span>
+      <span class="value">{{ savings_spent | money }}</span>
+    </div>
+    <div class="stat">
+      <span class="label">Difference:</span>
+      <span class="value {% if savings_diff < 0 %}neg{% endif %}">{{ savings_diff | money }}</span>
+    </div>
+  </div>
+</section>
+{% endblock %}

@@ -254,5 +254,16 @@ class TestCalc(unittest.TestCase):
         self.assertEqual(res_seq["2027-01"]["free_available"], 100)
 
 
+class UnicodeDigitTests(unittest.TestCase):
+    def test_non_ascii_digits_rejected(self):
+        for bad in ("１４", "1٤"):
+            with self.assertRaises(ValueError):
+                parse_money(bad)
+            with self.assertRaises(ValueError):
+                parse_hours(bad)
+            with self.assertRaises(ValueError):
+                pay_month(bad + "-01")
+
+
 if __name__ == "__main__":
     unittest.main()

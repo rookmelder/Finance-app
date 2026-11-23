@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Edit Income {{ income.pay_month }} - Finance{% endblock %}
+{% block content %}
+<div class="page-header">
+  <a href="{{ url_for('income') }}" class="back-link">&larr; Back to Income</a>
+  <h1>Edit Income for {{ income.pay_month }}</h1>
+</div>
+
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <h2>Details &amp; Snapshot</h2>
+  <div class="stat-grid">
+    <div class="stat">
+      <span class="label">Pay Month:</span>
+      <span class="value">{{ income.pay_month }}</span>
+    </div>
+    <div class="stat">
+      <span class="label">Work Month:</span>
+      <span class="value">{{ income.work_month }}</span>
+    </div>
+    <div class="stat">
+      <span class="label">Snapshot Rate:</span>
+      <span class="value">{{ income.rate_cents | money }} / h</span>
+    </div>
+    <div class="stat">
+      <span class="label">Snapshot Allowance:</span>
+      <span class="value">{{ income.allowance_cents | money }} / day</span>
+    </div>
+    <div class="stat">
+      <span class="label">Snapshot Hours/day:</span>
+      <span class="value">{{ income.minutes_per_day | hours }} h</span>
+    </div>
+    <div class="stat">
+      <span class="label">Actual Pay:</span>
+      <span class="value">
+        {% if income.actual_cents is not none %}
+          {{ income.actual_cents | money }}
+        {% else %}
+          —
+        {% endif %}
+      </span>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Update Days / Override</h2>
+  <form method="post" action="{{ url_for('income_edit', pay_month=income.pay_month) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="save">
+
+    <label>Days worked:
+      <input type="number" name="days" value="{{ income.days }}" min="0" max="31" required>
+    </label>
+
+    <label>Hours override (optional):
+      <input type="text" name="hours_override" value="{% if income.minutes_override is not none %}{{ income.minutes_override | hours }}{% endif %}" placeholder="e.g. 135">
+    </label>
+
+    <label class="checkbox-label">
+      <input type="checkbox" name="refresh_snapshot" value="1">
+      Use current settings (refresh rate, allowance and percentages snapshot)
+    </label>
+
+    <button type="submit">Save Changes</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Actual Received Pay</h2>
+  <form method="post" action="{{ url_for('income_edit', pay_month=income.pay_month) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="set_actual">
+
+    <label>Actual pay (€):
+      <input type="text" name="actual" value="{% if income.actual_cents is not none %}{{ "%.2f"|format(income.actual_cents / 100) }}{% endif %}" placeholder="e.g. 2100.00" required>
+    </label>
+
+    <button type="submit">Set Actual Pay</button>
+  </form>
+
+  {% if income.actual_cents is not none %}
+  <form method="post" action="{{ url_for('income_edit', pay_month=income.pay_month) }}" class="mt-2">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="clear_actual">
+    <button type="submit" class="btn-secondary">Clear Actual Pay</button>
+  </form>
+  {% endif %}
+</section>
+
+<section class="card danger-card">
+  <h2>Delete Record</h2>
+  <p>Permanently remove this income record.</p>
+  <form method="post" action="{{ url_for('income_edit', pay_month=income.pay_month) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="delete">
+    <button type="submit" class="btn-danger">Delete Income</button>
+  </form>
+</section>
+{% endblock %}

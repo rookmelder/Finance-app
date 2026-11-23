@@ -7,7 +7,7 @@ def _parse_month(month_str: str) -> tuple[int, int]:
     """Validate YYYY-MM format with month 01-12 and return (year, month)."""
     if not isinstance(month_str, str):
         raise ValueError(f"Invalid month: {month_str!r}")
-    m = re.fullmatch(r"(\d{4})-(\d{2})", month_str)
+    m = re.fullmatch(r"([0-9]{4})-([0-9]{2})", month_str)
     if not m:
         raise ValueError(f"Invalid month format (expected YYYY-MM): {month_str!r}")
     year = int(m.group(1))
@@ -145,7 +145,7 @@ def parse_money(text: str) -> int:
         raise ValueError("Signs not allowed in parse_money or negative value")
 
     # Validate regex: digits optionally followed by . and 1 or 2 digits
-    if not re.fullmatch(r"\d+(\.\d{1,2})?", s):
+    if not re.fullmatch(r"[0-9]+(\.[0-9]{1,2})?", s):
         raise ValueError(f"Invalid money format: {text!r}")
 
     d = Decimal(s)
@@ -168,7 +168,7 @@ def parse_hours(text: str) -> int:
     if s.startswith("-") or s.startswith("+"):
         raise ValueError("Signs not allowed in parse_hours or negative value")
 
-    if not re.fullmatch(r"\d+(\.\d{1,2})?", s):
+    if not re.fullmatch(r"[0-9]+(\.[0-9]{1,2})?", s):
         raise ValueError(f"Invalid hours format: {text!r}")
 
     d = Decimal(s)
