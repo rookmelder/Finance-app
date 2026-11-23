@@ -14,7 +14,7 @@
 ## Settings (read by delegate.py)
 
 ```settings
-check_one: python3 -m unittest tests.test_{part} -v
+check_one: python3 -m unittest tests.test_{name} -v
 check_all: python3 -m unittest discover -s tests
 check_dir: tests
 private: yes

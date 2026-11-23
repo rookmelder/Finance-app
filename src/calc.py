@@ -1,0 +1,244 @@
+import datetime
+import re
+from decimal import Decimal, ROUND_HALF_UP
+
+
+def _parse_month(month_str: str) -> tuple[int, int]:
+    """Validate YYYY-MM format with month 01-12 and return (year, month)."""
+    if not isinstance(month_str, str):
+        raise ValueError(f"Invalid month: {month_str!r}")
+    m = re.fullmatch(r"(\d{4})-(\d{2})", month_str)
+    if not m:
+        raise ValueError(f"Invalid month format (expected YYYY-MM): {month_str!r}")
+    year = int(m.group(1))
+    month = int(m.group(2))
+    if not (1 <= month <= 12):
+        raise ValueError(f"Month out of range 01-12: {month_str!r}")
+    return year, month
+
+
+def pay_month(work_month: str) -> str:
+    """Return pay month (work_month + 1 month) as YYYY-MM."""
+    year, month = _parse_month(work_month)
+    if month == 12:
+        return f"{year + 1:04d}-01"
+    else:
+        return f"{year:04d}-{month + 1:02d}"
+
+
+def default_work_month(today: datetime.date) -> str:
+    """If today.day >= 15 the next calendar month, else current month."""
+    if not isinstance(today, (datetime.date, datetime.datetime)):
+        raise ValueError(f"Invalid date: {today!r}")
+    year = today.year
+    month = today.month
+    if today.day >= 15:
+        if month == 12:
+            return f"{year + 1:04d}-01"
+        else:
+            return f"{year:04d}-{month + 1:02d}"
+    else:
+        return f"{year:04d}-{month:02d}"
+
+
+def month_range(start: str, end: str) -> list[str]:
+    """Inclusive list of YYYY-MM from start to end."""
+    sy, sm = _parse_month(start)
+    ey, em = _parse_month(end)
+    if (ey, em) < (sy, sm):
+        raise ValueError(f"end month {end!r} is before start month {start!r}")
+
+    result = []
+    cy, cm = sy, sm
+    while (cy, cm) <= (ey, em):
+        result.append(f"{cy:04d}-{cm:02d}")
+        if cm == 12:
+            cy += 1
+            cm = 1
+        else:
+            cm += 1
+    return result
+
+
+def estimate_cents(
+    rate_cents: int,
+    minutes_per_day: int,
+    days: int,
+    allowance_cents: int,
+    other_cents: int = 0,
+    minutes_override: int | None = None,
+) -> int:
+    """
+    minutes = minutes_override if not None else days * minutes_per_day
+    hours_pay = round_half_up(rate_cents * minutes / 60)
+    return hours_pay + days * allowance_cents + other_cents
+    """
+    if minutes_override is not None:
+        minutes = minutes_override
+    else:
+        minutes = days * minutes_per_day
+
+    # round half up: (2*a + b) // (2*b) for positive ints
+    # hours_pay = (rate_cents * minutes) / 60
+    numerator = rate_cents * minutes
+    denominator = 60
+    if numerator >= 0:
+        hours_pay = (2 * numerator + denominator) // (2 * denominator)
+    else:
+        # For completeness if negative rate/minutes
+        hours_pay = -((2 * (-numerator) + denominator) // (2 * denominator))
+
+    return hours_pay + days * allowance_cents + other_cents
+
+
+def split_income(
+    income_cents: int, needs_pct: int, free_pct: int, save_pct: int
+) -> tuple[int, int, int]:
+    """
+    ValueError unless all >= 0 and sum == 100.
+    needs = income*needs_pct//100, free = income*free_pct//100,
+    savings = income - needs - free (so the three ALWAYS add up to income)
+    """
+    if needs_pct < 0 or free_pct < 0 or save_pct < 0:
+        raise ValueError("Percentages must be non-negative")
+    if needs_pct + free_pct + save_pct != 100:
+        raise ValueError(
+            f"Percentages must sum to 100 (got {needs_pct + free_pct + save_pct})"
+        )
+
+    needs = (income_cents * needs_pct) // 100
+    free = (income_cents * free_pct) // 100
+    savings = income_cents - needs - free
+    return needs, free, savings
+
+
+def monthly_set_aside(amount_cents: int, every_months: int) -> int:
+    """ceil(amount / every_months); ValueError if every_months < 1 or amount < 0"""
+    if every_months < 1:
+        raise ValueError("every_months must be at least 1")
+    if amount_cents < 0:
+        raise ValueError("amount_cents cannot be negative")
+    # Integer ceil: (amount_cents + every_months - 1) // every_months
+    return (amount_cents + every_months - 1) // every_months
+
+
+def parse_money(text: str) -> int:
+    """
+    accepts "14", "14.5", "14,50", with optional leading/trailing spaces and optional leading "€";
+    rejects empty, negative, non-numeric, more than 2 decimals. Returns integer cents.
+    """
+    if not isinstance(text, str):
+        raise ValueError("Expected string input")
+    s = text.strip()
+    if not s:
+        raise ValueError("Empty money string")
+    if s.startswith("€"):
+        s = s[1:].strip()
+    if not s:
+        raise ValueError("Empty money string after currency symbol")
+
+    # Replace comma with dot
+    s = s.replace(",", ".")
+
+    # Check for negative sign
+    if s.startswith("-") or s.startswith("+"):
+        raise ValueError("Signs not allowed in parse_money or negative value")
+
+    # Validate regex: digits optionally followed by . and 1 or 2 digits
+    if not re.fullmatch(r"\d+(\.\d{1,2})?", s):
+        raise ValueError(f"Invalid money format: {text!r}")
+
+    d = Decimal(s)
+    cents = int(d * 100)
+    return cents
+
+
+def parse_hours(text: str) -> int:
+    """
+    decimal hours -> minutes; accept up to 2 decimals; minutes = round half up;
+    reject negative/garbage/empty.
+    """
+    if not isinstance(text, str):
+        raise ValueError("Expected string input")
+    s = text.strip()
+    if not s:
+        raise ValueError("Empty hours string")
+    s = s.replace(",", ".")
+
+    if s.startswith("-") or s.startswith("+"):
+        raise ValueError("Signs not allowed in parse_hours or negative value")
+
+    if not re.fullmatch(r"\d+(\.\d{1,2})?", s):
+        raise ValueError(f"Invalid hours format: {text!r}")
+
+    d = Decimal(s)
+    # Convert hours to minutes: d * 60, round half up
+    minutes_dec = (d * Decimal(60)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return int(minutes_dec)
+
+
+def format_money(cents: int) -> str:
+    """
+    196200 -> "€1,962.00", -5 -> "-€0.05"
+    thousands separated by comma.
+    """
+    is_neg = cents < 0
+    abs_cents = abs(cents)
+    euros = abs_cents // 100
+    rem_cents = abs_cents % 100
+    formatted = f"€{euros:,}.{rem_cents:02d}"
+    if is_neg:
+        return f"-{formatted}"
+    return formatted
+
+
+def format_hours(minutes: int) -> str:
+    """
+    hours as decimal without trailing zeros:
+    450 -> "7.5", 480 -> "8", 465 -> "7.75", 470 -> "7.83" (round to 2 decimals, half up).
+    """
+    # decimal hours = minutes / 60
+    # round to 2 decimals half up
+    d = (Decimal(minutes) / Decimal(60)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    # format without unnecessary trailing zeros / decimal point
+    s = f"{d:.2f}"
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s
+
+
+def budget_chain(
+    budget_by_month: dict[str, tuple[int, int, int]],
+    spent_free_by_month: dict[str, int],
+    carry_over: bool,
+    months: list[str],
+) -> dict[str, dict]:
+    """
+    `budget_chain`: `budget_by_month[m]` = `(needs, free, savings)` already split for that month (missing month = (0,0,0)).
+    For each month in `months` (ascending, consecutive) it returns `{"free", "carry_in", "spent_free", "free_available"}`:
+    `carry_in` = previous month's `free_available` if `carry_over` and the month is not the first in `months`, else 0 (may be negative);
+    `spent_free` = `spent_free_by_month.get(m, 0)`; `free_available = free + carry_in - spent_free`
+    """
+    result: dict[str, dict] = {}
+    prev_free_available = 0
+
+    for idx, m in enumerate(months):
+        budget = budget_by_month.get(m, (0, 0, 0))
+        free = budget[1]
+        spent_free = spent_free_by_month.get(m, 0)
+
+        if idx == 0 or not carry_over:
+            carry_in = 0
+        else:
+            carry_in = prev_free_available
+
+        free_available = free + carry_in - spent_free
+        result[m] = {
+            "free": free,
+            "carry_in": carry_in,
+            "spent_free": spent_free,
+            "free_available": free_available,
+        }
+        prev_free_available = free_available
+
+    return result
