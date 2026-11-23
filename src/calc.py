@@ -300,3 +300,109 @@ def format_percent_bp(bp: int) -> str:
     """271 -> "2.71", 250 -> "2.5", 0 -> "0"."""
     s = f"{bp // 100}.{bp % 100:02d}".rstrip("0").rstrip(".")
     return s
+
+
+def easter(year: int) -> datetime.date:
+    """Gregorian Easter Sunday (anonymous / Meeus-Jones-Butcher algorithm)."""
+    a = year % 19
+    b, cc = divmod(year, 100)
+    dd, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - dd - g + 15) % 30
+    i, k = divmod(cc, 4)
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month, day = divmod(h + l - 7 * m + 114, 31)
+    return datetime.date(year, month, day + 1)
+
+
+def belgian_holidays(year: int) -> dict:
+    """The 10 Belgian legal holidays of a year as {"YYYY-MM-DD": name}."""
+    e = easter(year)
+    td = datetime.timedelta
+    days = {
+        datetime.date(year, 1, 1): "New Year's Day",
+        e + td(days=1): "Easter Monday",
+        datetime.date(year, 5, 1): "Labour Day",
+        e + td(days=39): "Ascension Day",
+        e + td(days=50): "Whit Monday",
+        datetime.date(year, 7, 21): "Belgian National Day",
+        datetime.date(year, 8, 15): "Assumption Day",
+        datetime.date(year, 11, 1): "All Saints' Day",
+        datetime.date(year, 11, 11): "Armistice Day",
+        datetime.date(year, 12, 25): "Christmas Day",
+    }
+    return {k.isoformat(): v for k, v in sorted(days.items())}
+
+
+def estimate_from_days(
+    days: list,
+    rate_cents: int,
+    allowance_cents: int,
+    clothing_cents: int = 0,
+    sunday_cents_per_hour: int = 0,
+    sunday_cap_minutes: int = 0,
+    rsz_bp: int = 0,
+    other_cents: int = 0,
+) -> dict:
+    """Payslip estimate from a list of worked days: [{"date": "YYYY-MM-DD", "minutes": int, "holiday": bool}].
+
+    Same result keys as estimate_breakdown plus "days", "sundays", "holiday_minutes".
+    hours_pay: half_up(rate * total_minutes / 60), once. holiday_extra: half_up(rate * holiday_minutes / 60), once.
+    sunday_pay: per Sunday half_up(sunday_cents_per_hour * min(minutes, cap) / 60), summed.
+    """
+    for name, value in (("rate_cents", rate_cents), ("allowance_cents", allowance_cents),
+                        ("clothing_cents", clothing_cents), ("sunday_cents_per_hour", sunday_cents_per_hour),
+                        ("sunday_cap_minutes", sunday_cap_minutes), ("other_cents", other_cents)):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{name} must be an integer >= 0")
+    if not isinstance(rsz_bp, int) or isinstance(rsz_bp, bool) or not 0 <= rsz_bp <= 10000:
+        raise ValueError("rsz_bp must be an integer between 0 and 10000")
+    seen = set()
+    total_minutes = holiday_minutes = sunday_pay = sundays = 0
+    for entry in days:
+        try:
+            date = datetime.date.fromisoformat(entry["date"])
+            minutes = entry["minutes"]
+        except (KeyError, TypeError, ValueError):
+            raise ValueError(f"Invalid day entry: {entry!r}")
+        if not isinstance(minutes, int) or isinstance(minutes, bool) or not 1 <= minutes <= 1440:
+            raise ValueError(f"minutes must be 1-1440 for {entry['date']}")
+        if date in seen:
+            raise ValueError(f"Duplicate date {entry['date']}")
+        seen.add(date)
+        total_minutes += minutes
+        if entry.get("holiday"):
+            holiday_minutes += minutes
+        if date.weekday() == 6:
+            sundays += 1
+            sunday_pay += _half_up(sunday_cents_per_hour * min(minutes, sunday_cap_minutes), 60)
+    hours_pay = _half_up(rate_cents * total_minutes, 60)
+    holiday_extra = _half_up(rate_cents * holiday_minutes, 60)
+    gross = hours_pay + holiday_extra + sunday_pay
+    rsz = _half_up(gross * rsz_bp, 10000)
+    net = gross - rsz
+    allowances = len(seen) * (allowance_cents + clothing_cents)
+    return {
+        "minutes": total_minutes,
+        "hours_pay": hours_pay,
+        "holiday_extra": holiday_extra,
+        "sunday_pay": sunday_pay,
+        "gross": gross,
+        "rsz": rsz,
+        "net": net,
+        "allowances": allowances,
+        "other": other_cents,
+        "total": net + allowances + other_cents,
+        "days": len(seen),
+        "sundays": sundays,
+        "holiday_minutes": holiday_minutes,
+    }
+
+
+def add_months(month: str, n: int) -> str:
+    """Shift a YYYY-MM month by n months (negative allowed)."""
+    year, mon = _parse_month(month)
+    index = year * 12 + (mon - 1) + n
+    return f"{index // 12:04d}-{index % 12 + 1:02d}"

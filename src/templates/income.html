@@ -5,11 +5,35 @@
 
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
-<section class="card">
-  <h2>Log Monthly Income</h2>
+<div class="month-list">
+  {% for m in months %}
+  <a class="month-card{% if m.is_default %} month-card-default{% endif %}" href="{{ url_for('calendar_page', work_month=m.work_month) }}"{% if m.is_default %} id="current"{% endif %}>
+    <div class="month-card-header">
+      <span class="month-label">{{ m.label }}</span>
+      <div class="month-card-badges">
+        {% if m.is_default %}<span class="badge badge-active">Next up</span>{% endif %}
+        {% if m.has_income and not m.per_day %}<span class="badge badge-inactive">totals</span>{% endif %}
+      </div>
+    </div>
+    <div class="month-card-sub">Work month -> paid {{ m.pay_month }}</div>
+    {% if m.has_income %}
+    <div class="month-card-stats">
+      <span>{{ m.days }} {% if m.days == 1 %}day{% else %}days{% endif %}</span>
+      <span class="month-card-estimate">{{ m.estimate | money }}</span>
+      {% if m.actual is not none %}
+      <span class="month-card-actual">Actual: {{ m.actual | money }}</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </a>
+  {% endfor %}
+</div>
+
+<details class="card">
+  <summary>Add by totals (no calendar)</summary>
   <form method="post" action="{{ url_for('income') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    
+
     <label>Work Month:
       <input type="month" name="work_month" value="{{ default_wm }}" required>
     </label>
@@ -31,45 +55,7 @@
       <input type="text" name="holiday_hours" placeholder="e.g. 7.5">
     </label>
 
-    <button type="submit">Add Income</button>
+    <button type="submit">Add by totals</button>
   </form>
-</section>
-
-<section class="card">
-  <h2>Income History</h2>
-  <div class="table-responsive">
-    <table>
-      <thead>
-        <tr>
-          <th>Pay Month</th>
-          <th>Work Month</th>
-          <th>Days</th>
-          <th>Sun</th>
-          <th>Estimate</th>
-          <th>Actual</th>
-          <th>Used</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for inc in incomes %}
-        <tr>
-          <td><strong>{{ inc.pay_month }}</strong></td>
-          <td>{{ inc.work_month }}</td>
-          <td>{{ inc.days }}</td>
-          <td>{{ inc.sundays }}</td>
-          <td>{{ inc.estimate | money }}</td>
-          <td>{% if inc.actual_cents is not none %}{{ inc.actual_cents | money }}{% else %}-{% endif %}</td>
-          <td><span class="badge badge-{{ inc.used }}">{{ inc.used }}</span></td>
-          <td><a href="{{ url_for('income_edit', pay_month=inc.pay_month) }}">Edit</a></td>
-        </tr>
-        {% else %}
-        <tr>
-          <td colspan="8">No income records yet.</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+</details>
 {% endblock %}

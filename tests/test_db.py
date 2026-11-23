@@ -296,5 +296,79 @@ class PayslipFieldTests(unittest.TestCase):
         db.connect(path).close()  # second connect must not fail
 
 
+class CalendarDbTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = db.connect(":memory:")
+        db.update_settings(self.conn, rate_cents=1597, allowance_cents=368, clothing_cents=220)
+
+    def test_settings_defaults_and_derived_flat_premium(self):
+        s = db.get_settings(self.conn)
+        self.assertEqual((s["sunday_cents_per_hour"], s["sunday_cap_minutes"], s["sunday_premium_cents"]), (200, 360, 1200))
+        s = db.update_settings(self.conn, sunday_cents_per_hour=300)
+        self.assertEqual(s["sunday_premium_cents"], 1800)
+        with self.assertRaises(ValueError):
+            db.update_settings(self.conn, sunday_premium_cents=5)  # derived, not editable
+
+    def test_save_month_days_creates_income_and_derives(self):
+        days = [{"date": "2026-10-04", "minutes": 450, "holiday": False},
+                {"date": "2026-10-05", "minutes": 450, "holiday": False},
+                {"date": "2026-11-01"[:7] + "-x", "minutes": 1}][:2]
+        row = db.save_month_days(self.conn, "2026-10", days)
+        self.assertEqual(row["pay_month"], "2026-11")
+        self.assertEqual((row["per_day"], row["days"], row["sundays"], row["minutes_override"]), (1, 2, 1, 900))
+        self.assertEqual(db.list_days(self.conn, "2026-10"), days)
+        self.assertEqual(row["rate_cents"], 1597)
+
+    def test_replace_and_clear(self):
+        db.save_month_days(self.conn, "2026-10", [{"date": "2026-10-04", "minutes": 450, "holiday": True}])
+        row = db.save_month_days(self.conn, "2026-10", [{"date": "2026-10-06", "minutes": 390, "holiday": False}])
+        self.assertEqual([x["date"] for x in db.list_days(self.conn, "2026-10")], ["2026-10-06"])
+        self.assertEqual((row["sundays"], row["holiday_minutes"]), (0, 0))
+        row = db.save_month_days(self.conn, "2026-10", [])
+        self.assertEqual((row["days"], row["per_day"]), (0, 1))
+        self.assertEqual(db.list_days(self.conn, "2026-10"), [])
+
+    def test_empty_without_income_creates_nothing(self):
+        self.assertIsNone(db.save_month_days(self.conn, "2026-10", []))
+        self.assertEqual(db.list_income(self.conn), [])
+
+    def test_validation_leaves_db_untouched(self):
+        db.save_month_days(self.conn, "2026-10", [{"date": "2026-10-06", "minutes": 450, "holiday": False}])
+        bad = [[{"date": "2026-11-02", "minutes": 450}],
+               [{"date": "2026-10-06", "minutes": 0}],
+               [{"date": "2026-10-06", "minutes": 450}, {"date": "2026-10-06", "minutes": 60}],
+               [{"date": "2026-10-32", "minutes": 450}],
+               [{"date": "2026-10-06", "minutes": 450, "holiday": "yes"}],
+               "nope", [5]]
+        for entries in bad:
+            with self.assertRaises(ValueError):
+                db.save_month_days(self.conn, "2026-10", entries)
+        self.assertEqual(len(db.list_days(self.conn, "2026-10")), 1)
+
+    def test_delete_income_removes_days_and_refresh_snapshot(self):
+        db.save_month_days(self.conn, "2026-10", [{"date": "2026-10-06", "minutes": 450, "holiday": False}])
+        db.update_settings(self.conn, rate_cents=2000)
+        self.assertEqual(db.get_income(self.conn, "2026-11")["rate_cents"], 1597)
+        self.assertEqual(db.refresh_snapshot(self.conn, "2026-11")["rate_cents"], 2000)
+        self.assertEqual(len(db.list_days(self.conn, "2026-10")), 1)
+        db.delete_income(self.conn, "2026-11")
+        self.assertEqual(db.list_days(self.conn, "2026-10"), [])
+
+    def test_migrates_from_payslip_schema(self):
+        import os, sqlite3, tempfile
+        path = os.path.join(tempfile.mkdtemp(), "mid.db")
+        c = db.connect(path)
+        c.executescript("""
+            ALTER TABLE settings DROP COLUMN sunday_cents_per_hour; ALTER TABLE settings DROP COLUMN sunday_cap_minutes;
+            ALTER TABLE income DROP COLUMN sunday_cents_per_hour; ALTER TABLE income DROP COLUMN sunday_cap_minutes;
+            ALTER TABLE income DROP COLUMN per_day; DROP TABLE work_days;
+        """)
+        c.commit(); c.close()
+        c = db.connect(path)
+        self.assertEqual(db.get_settings(c)["sunday_cap_minutes"], 360)
+        self.assertEqual(db.list_days(c, "2026-10"), [])
+        c.close()
+
+
 if __name__ == "__main__":
     unittest.main()

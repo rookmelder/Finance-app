@@ -312,5 +312,65 @@ class PayslipTests(unittest.TestCase):
         self.assertEqual(estimate_cents(1400, 450, 18, 400), 196200)
 
 
+class CalendarModeTests(unittest.TestCase):
+    OCT = [  # October 2026: Sun 4 and Sun 11 plus Mon 5 (the user's 3 days / 2 Sundays)
+        {"date": "2026-10-04", "minutes": 450, "holiday": False},
+        {"date": "2026-10-05", "minutes": 450, "holiday": False},
+        {"date": "2026-10-11", "minutes": 450, "holiday": False},
+    ]
+    KW = dict(rate_cents=1597, allowance_cents=368, clothing_cents=220,
+              sunday_cents_per_hour=200, sunday_cap_minutes=360, rsz_bp=271)
+
+    def test_october_as_days_matches_payslip(self):
+        from src.calc import estimate_from_days
+        r = estimate_from_days(self.OCT, **self.KW)
+        self.assertEqual((r["hours_pay"], r["sunday_pay"], r["gross"], r["rsz"], r["net"]),
+                         (35933, 2400, 38333, 1039, 37294))
+        self.assertEqual((r["allowances"], r["total"], r["days"], r["sundays"]), (1764, 39058, 3, 2))
+
+    def test_sunday_hours_and_cap(self):
+        from src.calc import estimate_from_days
+        short = estimate_from_days([{"date": "2026-10-04", "minutes": 300, "holiday": False}], **self.KW)
+        self.assertEqual(short["sunday_pay"], 1000)
+        long = estimate_from_days([{"date": "2026-10-04", "minutes": 390, "holiday": False}], **self.KW)
+        self.assertEqual(long["sunday_pay"], 1200)
+
+    def test_holiday_extra_and_empty(self):
+        from src.calc import estimate_from_days
+        r = estimate_from_days([{"date": "2026-11-11", "minutes": 450, "holiday": True}], **self.KW)
+        self.assertEqual(r["holiday_extra"], 11978)
+        self.assertEqual(r["holiday_minutes"], 450)
+        self.assertEqual(estimate_from_days([], **self.KW)["total"], 0)
+
+    def test_invalid_entries(self):
+        from src.calc import estimate_from_days
+        for bad in ([{"date": "2026-10-04", "minutes": 0}], [{"date": "nope", "minutes": 450}],
+                    [{"date": "2026-10-04", "minutes": 450}, {"date": "2026-10-04", "minutes": 60}],
+                    [{"date": "2026-10-04"}]):
+            with self.assertRaises(ValueError):
+                estimate_from_days(bad, **self.KW)
+
+    def test_easter_and_belgian_holidays(self):
+        from src.calc import easter, belgian_holidays
+        import datetime as dt
+        self.assertEqual(easter(2026), dt.date(2026, 4, 5))
+        self.assertEqual(easter(2027), dt.date(2027, 3, 28))
+        self.assertEqual(easter(2025), dt.date(2025, 4, 20))
+        h = belgian_holidays(2026)
+        self.assertEqual(len(h), 10)
+        for day in ("2026-01-01", "2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25",
+                    "2026-07-21", "2026-08-15", "2026-11-01", "2026-11-11", "2026-12-25"):
+            self.assertIn(day, h)
+
+    def test_percent_helpers(self):
+        from src.calc import parse_percent_bp, format_percent_bp
+        self.assertEqual(parse_percent_bp("2.71%"), 271)
+        self.assertEqual(parse_percent_bp("2,5"), 250)
+        self.assertEqual(format_percent_bp(271), "2.71")
+        self.assertEqual(format_percent_bp(250), "2.5")
+        with self.assertRaises(ValueError):
+            parse_percent_bp("101")
+
+
 if __name__ == "__main__":
     unittest.main()

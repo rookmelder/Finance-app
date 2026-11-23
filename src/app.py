@@ -1,5 +1,6 @@
 """Flask web application for Finance app."""
 
+import calendar
 import datetime
 import os
 import sys
@@ -8,6 +9,7 @@ from flask import (
     abort,
     current_app,
     g,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -28,8 +30,23 @@ def get_db():
     return g.db
 
 
-def _estimate(row) -> dict:
-    """Pay breakdown for an income row, using the settings snapshot stored on that row."""
+def _estimate(conn, row) -> dict:
+    """Pay breakdown for an income row: from its calendar days when per_day, else from its totals.
+
+    Always uses the settings snapshot stored on the row. One function for every screen so the
+    list, the overview and the carry-over chain can never disagree.
+    """
+    if row["per_day"]:
+        return calc.estimate_from_days(
+            db.list_days(conn, row["work_month"]),
+            rate_cents=row["rate_cents"],
+            allowance_cents=row["allowance_cents"],
+            clothing_cents=row["clothing_cents"],
+            sunday_cents_per_hour=row["sunday_cents_per_hour"],
+            sunday_cap_minutes=row["sunday_cap_minutes"],
+            rsz_bp=row["rsz_bp"],
+            other_cents=row["other_cents"],
+        )
     return calc.estimate_breakdown(
         rate_cents=row["rate_cents"],
         minutes_per_day=row["minutes_per_day"],
@@ -43,6 +60,23 @@ def _estimate(row) -> dict:
         sunday_premium_cents=row["sunday_premium_cents"],
         rsz_bp=row["rsz_bp"],
     )
+
+
+def _breakdown_rows(b: dict) -> list:
+    """The breakdown as display rows [{"label", "value", "kind"}] (kind: normal | neg | total)."""
+    rows = [{"label": f"Hours ({calc.format_hours(b['minutes'])} h)", "value": calc.format_money(b["hours_pay"]), "kind": "normal"}]
+    if b["holiday_extra"]:
+        rows.append({"label": "Holiday extra", "value": calc.format_money(b["holiday_extra"]), "kind": "normal"})
+    if b["sunday_pay"]:
+        rows.append({"label": "Sunday premium", "value": calc.format_money(b["sunday_pay"]), "kind": "normal"})
+    rows.append({"label": "Gross", "value": calc.format_money(b["gross"]), "kind": "normal"})
+    rows.append({"label": "RSZ", "value": "-" + calc.format_money(b["rsz"]), "kind": "neg"})
+    rows.append({"label": "Net", "value": calc.format_money(b["net"]), "kind": "normal"})
+    rows.append({"label": "Fiets + kledij", "value": calc.format_money(b["allowances"]), "kind": "normal"})
+    if b["other"]:
+        rows.append({"label": "Other", "value": calc.format_money(b["other"]), "kind": "normal"})
+    rows.append({"label": "Estimated total", "value": calc.format_money(b["total"]), "kind": "total"})
+    return rows
 
 
 def _parse_extras(form) -> tuple:
@@ -74,22 +108,31 @@ def _month_nav(month_str: str) -> tuple[str, str]:
 
 
 def _render_income(conn, error=None, status_code=200):
-    raw_incomes = db.list_income(conn)
-    incomes = []
-    for r in raw_incomes:
-        item = dict(r)
-        item["estimate"] = _estimate(r)["total"]
-        item["used"] = "actual" if r["actual_cents"] is not None else "estimate"
-        incomes.append(item)
-    today = datetime.date.today()
-    default_wm = calc.default_work_month(today)
-    default_pm = calc.pay_month(default_wm)
+    by_work_month = {r["work_month"]: r for r in db.list_income(conn)}
+    default_wm = calc.default_work_month(datetime.date.today())
+    first = min([calc.add_months(default_wm, -2), *by_work_month])
+    months = []
+    for wm in calc.month_range(first, calc.add_months(default_wm, 6)):
+        row = by_work_month.get(wm)
+        year, mon = int(wm[:4]), int(wm[5:7])
+        months.append({
+            "work_month": wm,
+            "pay_month": calc.pay_month(wm),
+            "label": f"{calendar.month_name[mon]} {year}",
+            "is_default": wm == default_wm,
+            "has_income": row is not None,
+            "per_day": bool(row and row["per_day"]),
+            "days": row["days"] if row else None,
+            "estimate": _estimate(conn, row)["total"] if row else None,
+            "actual": row["actual_cents"] if row else None,
+            "used": ("actual" if row["actual_cents"] is not None else "estimate") if row else None,
+        })
     return (
         render_template(
             "income.html",
-            incomes=incomes,
+            months=months,
             default_wm=default_wm,
-            default_pm=default_pm,
+            default_pm=calc.pay_month(default_wm),
             error=error,
         ),
         status_code,
@@ -178,7 +221,7 @@ def create_app(cfg: dict) -> Flask:
         # Income for selected pay month
         income_row = db.get_income(conn, month_str)
         if income_row is not None:
-            breakdown = _estimate(income_row)
+            breakdown = _estimate(conn, income_row)
             estimate = breakdown["total"]
             if income_row["actual_cents"] is not None:
                 income_amount = income_row["actual_cents"]
@@ -229,7 +272,7 @@ def create_app(cfg: dict) -> Flask:
 
         budget_by_month = {}
         for r in all_incomes:
-            r_est = _estimate(r)["total"]
+            r_est = _estimate(conn, r)["total"]
             r_inc = r["actual_cents"] if r["actual_cents"] is not None else r_est
             budget_by_month[r["pay_month"]] = calc.split_income(
                 r_inc, r["needs_pct"], r["free_pct"], r["save_pct"]
@@ -320,25 +363,8 @@ def create_app(cfg: dict) -> Flask:
         if request.method == "POST":
             action = request.form.get("action", "").strip()
             try:
-                if action == "save":
-                    days_str = request.form.get("days", "").strip()
-                    try:
-                        days = int(days_str)
-                    except (ValueError, TypeError):
-                        raise ValueError(f"Days must be an integer, got {days_str!r}")
-                    override_str = request.form.get("hours_override", "").strip()
-                    override = calc.parse_hours(override_str) if override_str else None
-                    refresh = bool(request.form.get("refresh_snapshot"))
-                    sundays, holiday_minutes = _parse_extras(request.form)
-                    db.save_income(
-                        conn,
-                        work_month=income_row["work_month"],
-                        days=days,
-                        minutes_override=override,
-                        refresh_snapshot=refresh,
-                        sundays=sundays,
-                        holiday_minutes=holiday_minutes,
-                    )
+                if action == "refresh_snapshot":
+                    db.refresh_snapshot(conn, pay_month)
                     return redirect(url_for("income_edit", pay_month=pay_month), code=303)
                 elif action == "set_actual":
                     actual_str = request.form.get("actual", "").strip()
@@ -356,9 +382,9 @@ def create_app(cfg: dict) -> Flask:
             except ValueError as err:
                 refreshed_row = db.get_income(conn, pay_month)
                 shown = refreshed_row or income_row
-                return render_template("income_edit.html", income=shown, breakdown=_estimate(shown), error=str(err)), 400
+                return render_template("income_edit.html", income=shown, breakdown=_estimate(conn, shown), error=str(err)), 400
 
-        return render_template("income_edit.html", income=income_row, breakdown=_estimate(income_row))
+        return render_template("income_edit.html", income=income_row, breakdown=_estimate(conn, income_row))
 
     # 4. Recurring costs
     @app.route("/costs", methods=["GET", "POST"])
@@ -470,6 +496,79 @@ def create_app(cfg: dict) -> Flask:
                 return _render_expenses(conn, month=None, error=str(err), status_code=400)
         return _render_expenses(conn, month=month_arg)
 
+    # Calendar mode
+    def _valid_work_month(work_month):
+        try:
+            calc.pay_month(work_month)
+        except ValueError:
+            return False
+        return True
+
+    @app.route("/calendar/<work_month>")
+    def calendar_page(work_month):
+        if not _valid_work_month(work_month):
+            abort(404)
+        conn = get_db()
+        pay_m = calc.pay_month(work_month)
+        year, mon = int(work_month[:4]), int(work_month[5:7])
+        row = db.get_income(conn, pay_m)
+        snap = row or db.get_settings(conn)
+        per_day = bool(row and row["per_day"])
+        breakdown = _estimate(conn, row) if row else None
+        holidays = {k: v for k, v in calc.belgian_holidays(year).items() if k.startswith(work_month)}
+        normal = snap["minutes_per_day"]
+        cal = {
+            "work_month": work_month,
+            "pay_month": pay_m,
+            "save_url": url_for("calendar_save", work_month=work_month),
+            "weekday_offset": datetime.date(year, mon, 1).weekday(),
+            "days_in_month": calendar.monthrange(year, mon)[1],
+            "holidays": holidays,
+            "entries": db.list_days(conn, work_month) if per_day else [],
+            "presets": [
+                {"id": "normal", "label": "Normal day", "minutes": normal, "holiday": False},
+                {"id": "short", "label": "1 hour less", "minutes": max(normal - 60, 1), "holiday": False},
+                {"id": "holiday", "label": "Holiday", "minutes": normal, "holiday": True},
+            ],
+            "rows": _breakdown_rows(breakdown) if breakdown else [],
+            "total": calc.format_money(breakdown["total"]) if breakdown else calc.format_money(0),
+            "days": breakdown["days"] if per_day else 0,
+            "sundays": breakdown["sundays"] if per_day else 0,
+        }
+        legacy_note = None
+        if row and not per_day:
+            legacy_note = (f"This month currently uses totals ({row['days']} days, estimate "
+                           f"{calc.format_money(_estimate(conn, row)['total'])}). Placing days here switches it to the calendar.")
+        return render_template(
+            "calendar.html",
+            cal=cal,
+            work_month=work_month,
+            pay_month=pay_m,
+            label=f"{calendar.month_name[mon]} {year}",
+            prev_month=calc.add_months(work_month, -1),
+            next_month=calc.add_months(work_month, 1),
+            legacy_note=legacy_note,
+        )
+
+    @app.route("/calendar/<work_month>/save", methods=["POST"])
+    def calendar_save(work_month):
+        if not _valid_work_month(work_month):
+            return jsonify(ok=False, error="Invalid month"), 404
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, dict) or "days" not in payload:
+            return jsonify(ok=False, error="Expected JSON like {\"days\": [...]}"), 400
+        conn = get_db()
+        try:
+            row = db.save_month_days(conn, work_month, payload["days"])
+        except ValueError as err:
+            return jsonify(ok=False, error=str(err)), 400
+        pay_m = calc.pay_month(work_month)
+        if row is None:
+            return jsonify(ok=True, pay_month=pay_m, days=0, sundays=0, total=calc.format_money(0), rows=[])
+        b = _estimate(conn, row)
+        return jsonify(ok=True, pay_month=pay_m, days=b["days"], sundays=b["sundays"],
+                       total=calc.format_money(b["total"]), rows=_breakdown_rows(b))
+
     # 6. Settings
     @app.route("/settings", methods=["GET", "POST"])
     def settings():
@@ -492,8 +591,11 @@ def create_app(cfg: dict) -> Flask:
                 carry_over = 1 if request.form.get("carry_over") else 0
                 clothing_str = request.form.get("clothing", "").strip()
                 clothing_cents = calc.parse_money(clothing_str) if clothing_str else 0
-                sunday_str = request.form.get("sunday_premium", "").strip()
-                sunday_premium_cents = calc.parse_money(sunday_str) if sunday_str else 0
+                current = db.get_settings(conn)
+                sph_str = request.form.get("sunday_per_hour", "").strip()
+                sunday_cents_per_hour = calc.parse_money(sph_str) if sph_str else current["sunday_cents_per_hour"]
+                cap_str = request.form.get("sunday_cap_hours", "").strip()
+                sunday_cap_minutes = calc.parse_hours(cap_str) if cap_str else current["sunday_cap_minutes"]
                 rsz_bp = calc.parse_percent_bp(request.form.get("rsz", "0") or "0")
 
                 db.update_settings(
@@ -507,7 +609,8 @@ def create_app(cfg: dict) -> Flask:
                     save_pct=save_pct,
                     carry_over=carry_over,
                     clothing_cents=clothing_cents,
-                    sunday_premium_cents=sunday_premium_cents,
+                    sunday_cents_per_hour=sunday_cents_per_hour,
+                    sunday_cap_minutes=sunday_cap_minutes,
                     rsz_bp=rsz_bp,
                 )
                 return redirect(url_for("settings"), code=303)

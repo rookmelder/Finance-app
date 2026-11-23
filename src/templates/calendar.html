@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Calendar {{ label }} - Finance{% endblock %}
+
+{% block head %}
+<meta name="csrf-token" content="{{ csrf_token() }}">
+{% endblock %}
+
+{% block content %}
+<div class="month-navigation">
+  <a class="nav-arrow" href="{{ url_for('calendar_page', work_month=prev_month) }}">← prev</a>
+  <h1>{{ label }}</h1>
+  <a class="nav-arrow" href="{{ url_for('calendar_page', work_month=next_month) }}">next →</a>
+</div>
+
+<p class="help-text">Hours worked in {{ label }} are paid in <strong>{{ pay_month }}</strong>.</p>
+
+{% if legacy_note %}<p class="notice">{{ legacy_note }}</p>{% endif %}
+
+<script type="application/json" id="cal-data">{{ cal | tojson }}</script>
+
+<div id="presets" class="presets"></div>
+<div id="calendar" class="cal-grid" role="grid"></div>
+<div id="status" class="cal-status" role="status" aria-live="polite"></div>
+<section class="card" id="summary"></section>
+
+<noscript><p class="error">The calendar needs JavaScript.</p></noscript>
+
+<div class="cal-links">
+  <p><a class="back-link" href="{{ url_for('income') }}">← All months</a></p>
+  <p><a id="edit-link" href="{{ url_for('income_edit', pay_month=pay_month) }}" {% if not cal.rows %}hidden{% endif %}>Actual pay, refresh rates, delete</a></p>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='calendar.js') }}"></script>
+{% endblock %}

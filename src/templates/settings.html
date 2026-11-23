@@ -26,8 +26,12 @@
       <input type="text" name="clothing" value="{{ "%.2f"|format(settings.clothing_cents / 100) }}">
     </label>
 
-    <label>Sunday premium per Sunday worked (€):
-      <input type="text" name="sunday_premium" value="{{ "%.2f"|format(settings.sunday_premium_cents / 100) }}">
+    <label>Sunday premium per hour (€):
+      <input type="text" name="sunday_per_hour" value="{{ "%.2f"|format(settings.sunday_cents_per_hour / 100) }}">
+    </label>
+
+    <label>Sunday premium: maximum hours per Sunday:
+      <input type="text" name="sunday_cap_hours" value="{{ settings.sunday_cap_minutes | hours }}">
     </label>
 
     <label>Social security / RSZ (% of gross):

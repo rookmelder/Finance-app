@@ -48,7 +48,9 @@ def connect(path: str) -> sqlite3.Connection:
                 carry_over INTEGER NOT NULL,
                 clothing_cents INTEGER NOT NULL DEFAULT 0,
                 sunday_premium_cents INTEGER NOT NULL DEFAULT 1200,
-                rsz_bp INTEGER NOT NULL DEFAULT 271
+                rsz_bp INTEGER NOT NULL DEFAULT 271,
+                sunday_cents_per_hour INTEGER NOT NULL DEFAULT 200,
+                sunday_cap_minutes INTEGER NOT NULL DEFAULT 360
             )
         """)
         conn.execute("""
@@ -69,7 +71,17 @@ def connect(path: str) -> sqlite3.Connection:
                 holiday_minutes INTEGER NOT NULL DEFAULT 0,
                 clothing_cents INTEGER NOT NULL DEFAULT 0,
                 sunday_premium_cents INTEGER NOT NULL DEFAULT 1200,
-                rsz_bp INTEGER NOT NULL DEFAULT 271
+                rsz_bp INTEGER NOT NULL DEFAULT 271,
+                sunday_cents_per_hour INTEGER NOT NULL DEFAULT 200,
+                sunday_cap_minutes INTEGER NOT NULL DEFAULT 360,
+                per_day INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS work_days (
+                date TEXT PRIMARY KEY,
+                minutes INTEGER NOT NULL CHECK (minutes BETWEEN 1 AND 1440),
+                holiday INTEGER NOT NULL DEFAULT 0
             )
         """)
         conn.execute("""
@@ -97,6 +109,8 @@ def connect(path: str) -> sqlite3.Connection:
             "clothing_cents": "INTEGER NOT NULL DEFAULT 0",
             "sunday_premium_cents": "INTEGER NOT NULL DEFAULT 1200",
             "rsz_bp": "INTEGER NOT NULL DEFAULT 271",
+            "sunday_cents_per_hour": "INTEGER NOT NULL DEFAULT 200",
+            "sunday_cap_minutes": "INTEGER NOT NULL DEFAULT 360",
         })
         _add_missing_columns(conn, "income", {
             "sundays": "INTEGER NOT NULL DEFAULT 0",
@@ -104,6 +118,9 @@ def connect(path: str) -> sqlite3.Connection:
             "clothing_cents": "INTEGER NOT NULL DEFAULT 0",
             "sunday_premium_cents": "INTEGER NOT NULL DEFAULT 1200",
             "rsz_bp": "INTEGER NOT NULL DEFAULT 271",
+            "sunday_cents_per_hour": "INTEGER NOT NULL DEFAULT 200",
+            "sunday_cap_minutes": "INTEGER NOT NULL DEFAULT 360",
+            "per_day": "INTEGER NOT NULL DEFAULT 0",
         })
         # Insert default settings if missing
         conn.execute("""
@@ -126,7 +143,7 @@ def update_settings(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
     allowed_fields = {
         "rate_cents", "allowance_cents", "minutes_per_day",
         "other_cents", "needs_pct", "free_pct", "save_pct", "carry_over",
-        "clothing_cents", "sunday_premium_cents", "rsz_bp",
+        "clothing_cents", "rsz_bp", "sunday_cents_per_hour", "sunday_cap_minutes",
     }
     for k in fields:
         if k not in allowed_fields:
@@ -136,7 +153,7 @@ def update_settings(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
     merged = {**current, **fields}
 
     # Validation
-    for cent_field in ("rate_cents", "allowance_cents", "other_cents", "clothing_cents", "sunday_premium_cents"):
+    for cent_field in ("rate_cents", "allowance_cents", "other_cents", "clothing_cents", "sunday_cents_per_hour"):
         val = merged[cent_field]
         if not isinstance(val, int) or isinstance(val, bool) or val < 0:
             raise ValueError(f"{cent_field} must be integer >= 0")
@@ -152,6 +169,12 @@ def update_settings(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
 
     if merged["needs_pct"] + merged["free_pct"] + merged["save_pct"] != 100:
         raise ValueError("Percentages must sum to 100")
+
+    cap = merged["sunday_cap_minutes"]
+    if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0 or cap > 1440:
+        raise ValueError("sunday_cap_minutes must be an integer between 0 and 1440")
+    # the flat per-Sunday premium used by the "add by totals" form is derived from the two fields
+    merged["sunday_premium_cents"] = (2 * merged["sunday_cents_per_hour"] * cap + 60) // 120
 
     rsz = merged["rsz_bp"]
     if not isinstance(rsz, int) or isinstance(rsz, bool) or rsz < 0 or rsz > 10000:
@@ -177,7 +200,9 @@ def update_settings(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
                 carry_over = ?,
                 clothing_cents = ?,
                 sunday_premium_cents = ?,
-                rsz_bp = ?
+                rsz_bp = ?,
+                sunday_cents_per_hour = ?,
+                sunday_cap_minutes = ?
             WHERE id = 1
         """, (
             merged["rate_cents"],
@@ -191,12 +216,15 @@ def update_settings(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
             merged["clothing_cents"],
             merged["sunday_premium_cents"],
             merged["rsz_bp"],
+            merged["sunday_cents_per_hour"],
+            merged["sunday_cap_minutes"],
         ))
     return get_settings(conn)
 
 
 _SNAPSHOT = ("rate_cents", "allowance_cents", "minutes_per_day", "other_cents", "needs_pct",
-             "free_pct", "save_pct", "clothing_cents", "sunday_premium_cents", "rsz_bp")
+             "free_pct", "save_pct", "clothing_cents", "sunday_premium_cents", "rsz_bp",
+             "sunday_cents_per_hour", "sunday_cap_minutes")
 
 
 def save_income(
@@ -282,11 +310,82 @@ def list_income(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 def delete_income(conn: sqlite3.Connection, pay_month: str) -> None:
     _validate_month(pay_month)
-    existing = conn.execute("SELECT 1 FROM income WHERE pay_month = ?", (pay_month,)).fetchone()
+    existing = conn.execute("SELECT work_month FROM income WHERE pay_month = ?", (pay_month,)).fetchone()
     if existing is None:
         raise ValueError(f"Income row for pay_month {pay_month} not found")
     with conn:
+        conn.execute("DELETE FROM work_days WHERE date LIKE ?", (existing["work_month"] + "-%",))
         conn.execute("DELETE FROM income WHERE pay_month = ?", (pay_month,))
+
+
+def list_days(conn: sqlite3.Connection, work_month: str) -> list[dict[str, Any]]:
+    """The worked days of a work month, oldest first: [{"date", "minutes", "holiday": bool}]."""
+    _validate_month(work_month)
+    rows = conn.execute("SELECT date, minutes, holiday FROM work_days WHERE date LIKE ? ORDER BY date",
+                        (work_month + "-%",)).fetchall()
+    return [{"date": r["date"], "minutes": r["minutes"], "holiday": bool(r["holiday"])} for r in rows]
+
+
+def save_month_days(conn: sqlite3.Connection, work_month: str, entries: list) -> Optional[dict[str, Any]]:
+    """Replace all worked days of a work month (calendar mode) and switch the month to per-day estimates.
+
+    entries: [{"date": "YYYY-MM-DD", "minutes": 1..1440, "holiday": bool}]. Every date must lie inside work_month,
+    no date twice. Creates the income row (with a settings snapshot) when missing; with no entries and no
+    income row nothing is created and None is returned. Derived columns days/sundays/minutes_override/
+    holiday_minutes are kept in step so lists stay correct.
+    """
+    pay_m = calc.pay_month(work_month)
+    if not isinstance(entries, list):
+        raise ValueError("days must be a list")
+    clean = []
+    seen = set()
+    for e in entries:
+        if not isinstance(e, dict):
+            raise ValueError("each day must be an object")
+        date_s = e.get("date")
+        _validate_iso_date(date_s)
+        if date_s[:7] != work_month:
+            raise ValueError(f"{date_s} is not in {work_month}")
+        if date_s in seen:
+            raise ValueError(f"duplicate date {date_s}")
+        seen.add(date_s)
+        minutes = e.get("minutes")
+        if not isinstance(minutes, int) or isinstance(minutes, bool) or not 1 <= minutes <= 1440:
+            raise ValueError(f"minutes must be an integer between 1 and 1440 ({date_s})")
+        holiday = e.get("holiday", False)
+        if not isinstance(holiday, bool):
+            raise ValueError("holiday must be true or false")
+        clean.append((date_s, minutes, 1 if holiday else 0))
+
+    existing = conn.execute("SELECT 1 FROM income WHERE pay_month = ?", (pay_m,)).fetchone()
+    if existing is None and not clean:
+        return None
+    total = sum(m for _, m, _ in clean)
+    holiday_minutes = sum(m for _, m, h in clean if h)
+    sundays = sum(1 for dt, _, _ in clean if date.fromisoformat(dt).weekday() == 6)
+    if existing is None:
+        save_income(conn, work_month, 0)  # creates the row with a settings snapshot
+    with conn:
+        conn.execute("DELETE FROM work_days WHERE date LIKE ?", (work_month + "-%",))
+        conn.executemany("INSERT INTO work_days (date, minutes, holiday) VALUES (?, ?, ?)", clean)
+        conn.execute(
+            "UPDATE income SET per_day = 1, days = ?, sundays = ?, minutes_override = ?, holiday_minutes = ?"
+            " WHERE pay_month = ?",
+            (len(clean), sundays, total, holiday_minutes, pay_m),
+        )
+    return get_income(conn, pay_m)
+
+
+def refresh_snapshot(conn: sqlite3.Connection, pay_month: str) -> dict[str, Any]:
+    """Copy the CURRENT settings into an income row's snapshot (days and hours stay as they are)."""
+    _validate_month(pay_month)
+    if conn.execute("SELECT 1 FROM income WHERE pay_month = ?", (pay_month,)).fetchone() is None:
+        raise ValueError(f"Income row for pay_month {pay_month} does not exist")
+    current = get_settings(conn)
+    with conn:
+        conn.execute("UPDATE income SET " + ", ".join(k + " = ?" for k in _SNAPSHOT) + " WHERE pay_month = ?",
+                     [current[k] for k in _SNAPSHOT] + [pay_month])
+    return get_income(conn, pay_month)  # type: ignore
 
 
 # --- Recurring ---

@@ -91,3 +91,24 @@ Mobile first, one CSS file, English, big touch targets, bottom/top nav with the 
 
 ## Checks by risk
 calc.py: HIGH (money) -> tester AND reviewer. db.py: medium -> reviewer. app.py: medium; auth: HIGH -> security-reviewer.
+
+
+---
+# Addendum 2026-11-23: calendar mode (per-day work entries)
+
+## Payslip model (supersedes the flat estimate above; see calc.estimate_breakdown)
+Gross = hours_pay + holiday_extra + sunday_pay; RSZ = half_up(gross * rsz_bp / 10000); net = gross - RSZ; total = net + days * (fiets + kledij) + other.
+
+## Per-day months
+- `work_days` table: `date` TEXT PRIMARY KEY (ISO), `minutes` INTEGER (1..1440), `holiday` INTEGER (0/1, stored, NOT recomputed on read). Work month = `date[:7]`.
+- `income.per_day` INTEGER DEFAULT 0. When 1 the estimate comes from the `work_days` rows via `calc.estimate_from_days`; when 0 the legacy formula (days/override/sundays/holiday_minutes) is used. Saving a month's calendar replaces all its day rows in one transaction, creates the income row (with settings snapshot) if missing, sets `per_day=1` and writes derived `days`, `sundays`, `minutes_override` (= total minutes), `holiday_minutes` into the income row so lists stay correct.
+- Settings (and the income snapshot): `sunday_cents_per_hour` (default 200), `sunday_cap_minutes` (default 360). `sunday_premium_cents` becomes DERIVED = half_up(per_hour * cap / 60) (= 1200) and is no longer editable; the legacy "Sundays" total field keeps using it.
+- Rounding (matches the payslip): hours_pay rounded ONCE on the total minutes; holiday_extra rounded once on total holiday minutes; Sunday premium rounded PER SUNDAY: `half_up(per_hour * min(minutes, cap) / 60)`.
+- A Sunday is any day whose date has weekday Sunday. A day that is a holiday gets holiday_extra (extra 1x rate on its minutes). A Sunday that is also a holiday gets BOTH (rule is isolated in estimate_from_days; to be confirmed with the user).
+- Belgian legal holidays (`calc.belgian_holidays(year)`): 1 Jan, Easter Monday, 1 May, Ascension (Easter+39), Whit Monday (Easter+50), 21 Jul, 15 Aug, 1 Nov, 11 Nov, 25 Dec. The holiday flag is defaulted from this list when a day is placed; the "Holiday" preset forces it on.
+
+## Endpoints
+- `GET /income`: list of months (work month -> pay month, days, estimate, actual) linking to the calendar; `<details>` form "add by totals" keeps the legacy POST /income.
+- `GET /calendar/<work_month>`: the calendar page (JSON data in a `<script type="application/json" id="cal-data">`).
+- `POST /calendar/<work_month>/save`: JSON body `{"days":[{"date":"2026-11-03","minutes":450,"holiday":false}, ...]}`, header `X-CSRF-Token`. Replies JSON `{"ok":true,"pay_month":"2026-12","days":7,"sundays":1,"total":"€954.00","rows":[{"label":"Hours (50.5 h)","value":"€806.49","kind":"normal"}, ...]}`; on invalid input status 400 `{"ok":false,"error":"..."}`. Never a 500 for bad input.
+- `/income/<pay_month>` (income_edit) stays for actual pay, refresh-snapshot and delete.
