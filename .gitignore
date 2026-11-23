@@ -3,3 +3,6 @@
 SETUP.md
 __pycache__/
 .obsidian
+data/
+__pycache__/
+*.pyc

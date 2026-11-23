@@ -1,35 +1,29 @@
 # Project
 
-<!-- Filled in by the Lead (Claude) from GOAL.md and a project pack (templates/packs/), with the user's OK.
-     delegate.py reads the "settings" block and pastes "Worker notes" into every worker's task. -->
-
-**Status:** NOT FILLED IN YET
+**Status:** filled in 2026-11-23
 
 ## About (for the Lead)
-- **In one sentence:** <what we are making, from GOAL.md>
-- **Pack(s) used:** <software / game / research / automation / none>
-- **Where the work lives:** <e.g. `src/`, `docs/`, `design/`> (always inside this folder)
-- **Roles in use:** <e.g. builder, tester, reviewer, scribe, designer>
-- **Done means (first version):** <from GOAL.md>
+- **In one sentence:** A private personal-finance website (Flask + SQLite) that estimates monthly pay from days worked, splits it 50/20/30, tracks recurring costs/subscriptions and shows what I can spend. Details: GOAL.md.
+- **Pack(s) used:** software
+- **Where the work lives:** `src/` (app), `tests/`, `data/` (SQLite db, git-ignored)
+- **Roles in use:** builder, builderplus, tester, reviewer, security-reviewer, scribe
+- **Done means (first version):** see "First version" in GOAL.md
+- **Git:** local only, no remote. No AI attribution in commits (see CLAUDE.md).
+- **Run:** `python3 -m src.app` on port 8080; password from env `FINANCE_PASSWORD`, never in code.
 
 ## Settings (read by delegate.py)
-Leave a value empty when it doesn't apply. `{name}` stands for the part a worker works on (the Lead passes it: `--part shop`).
 
 ```settings
-check_one:
-check_all:
-check_dir:
-private:
+check_one: python3 -m unittest tests.test_{part} -v
+check_all: python3 -m unittest discover -s tests
+check_dir: tests
+private: yes
 ```
 
-- `check_one`: checks one part. `delegate.py` runs it after a builder/tester (never the worker itself). Empty = no check.
-- `check_all`: the full check the Lead runs after every worker (all tests, a build, a linter). Empty = Lead reviews by reading.
-- `check_dir`: the only folder a tester may write in. Empty = only the files its task names.
-- `private`: `yes` = only Claude or agy may see the files. `no` = free cloud workers allowed (they may log
-  or train on prompts). Empty or anything else counts as `yes`.
-- Examples per kind of project: `templates/packs/<pack>/pack.md`.
-
 ## Worker notes (pasted into every worker's task: keep it short)
-- <language and version, allowed libraries, style to match>
-- <conventions: naming, units, coordinate order, tone of voice for text, ...>
-- <known traps for this project>
+- Python 3, Flask and the standard library only (sqlite3, unittest). No other packages, no Node, no network in tests.
+- Money is always integer cents; convert to euros only when displaying. Never floats for money.
+- Dates: ISO strings; a "month" is `YYYY-MM` and means the month the pay is RECEIVED (hours worked in the previous month).
+- Return errors, never print. Server-rendered HTML (Jinja templates) with simple CSS, mobile first, English text.
+- Secrets (password, secret key) come from environment variables, never in code or tests.
+- Tests use a temporary SQLite file or `:memory:`, never `data/`.
