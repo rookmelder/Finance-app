@@ -243,5 +243,58 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(s["id"], 1)
 
 
+class PayslipFieldTests(unittest.TestCase):
+    def setUp(self):
+        self.conn = db.connect(":memory:")
+
+    def test_new_setting_defaults_and_update(self):
+        s = db.get_settings(self.conn)
+        self.assertEqual((s["clothing_cents"], s["sunday_premium_cents"], s["rsz_bp"]), (0, 1200, 271))
+        s = db.update_settings(self.conn, clothing_cents=220, rsz_bp=271)
+        self.assertEqual(s["clothing_cents"], 220)
+        with self.assertRaises(ValueError):
+            db.update_settings(self.conn, rsz_bp=10001)
+
+    def test_income_stores_sundays_holiday_and_snapshot(self):
+        db.update_settings(self.conn, clothing_cents=220)
+        row = db.save_income(self.conn, "2026-11", 7, minutes_override=3030, sundays=1, holiday_minutes=450)
+        self.assertEqual((row["sundays"], row["holiday_minutes"], row["clothing_cents"]), (1, 450, 220))
+        db.update_settings(self.conn, clothing_cents=300)
+        row = db.save_income(self.conn, "2026-11", 7, sundays=1)
+        self.assertEqual(row["clothing_cents"], 220)  # snapshot kept
+        row = db.save_income(self.conn, "2026-11", 7, sundays=1, refresh_snapshot=True)
+        self.assertEqual(row["clothing_cents"], 300)
+
+    def test_sundays_validation(self):
+        with self.assertRaises(ValueError):
+            db.save_income(self.conn, "2026-11", 3, sundays=4)
+        with self.assertRaises(ValueError):
+            db.save_income(self.conn, "2026-11", 3, holiday_minutes=-1)
+
+    def test_migrates_old_database(self):
+        import os, sqlite3, tempfile
+        path = os.path.join(tempfile.mkdtemp(), "old.db")
+        old = sqlite3.connect(path)
+        old.executescript("""
+            CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK (id = 1), rate_cents INTEGER NOT NULL,
+              allowance_cents INTEGER NOT NULL, minutes_per_day INTEGER NOT NULL, other_cents INTEGER NOT NULL,
+              needs_pct INTEGER NOT NULL, free_pct INTEGER NOT NULL, save_pct INTEGER NOT NULL, carry_over INTEGER NOT NULL);
+            INSERT INTO settings VALUES (1, 1597, 368, 450, 0, 50, 20, 30, 1);
+            CREATE TABLE income (pay_month TEXT PRIMARY KEY, work_month TEXT NOT NULL, days INTEGER NOT NULL,
+              minutes_override INTEGER NULL, actual_cents INTEGER NULL, rate_cents INTEGER NOT NULL,
+              allowance_cents INTEGER NOT NULL, minutes_per_day INTEGER NOT NULL, other_cents INTEGER NOT NULL,
+              needs_pct INTEGER NOT NULL, free_pct INTEGER NOT NULL, save_pct INTEGER NOT NULL);
+            INSERT INTO income VALUES ('2026-12','2026-11',7,NULL,NULL,1597,368,450,0,50,20,30);
+        """)
+        old.commit(); old.close()
+        conn = db.connect(path)
+        self.assertEqual(db.get_settings(conn)["rate_cents"], 1597)
+        self.assertEqual(db.get_settings(conn)["rsz_bp"], 271)
+        row = db.get_income(conn, "2026-12")
+        self.assertEqual((row["sundays"], row["rsz_bp"]), (0, 271))
+        conn.close()
+        db.connect(path).close()  # second connect must not fail
+
+
 if __name__ == "__main__":
     unittest.main()

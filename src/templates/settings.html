@@ -14,12 +14,24 @@
       <input type="text" name="rate" value="{{ "%.2f"|format(settings.rate_cents / 100) }}" required>
     </label>
 
-    <label>Allowance per day (€):
+    <label>Fietsvergoeding per day (€):
       <input type="text" name="allowance" value="{{ "%.2f"|format(settings.allowance_cents / 100) }}" required>
     </label>
 
     <label>Hours worked per day:
       <input type="text" name="hours_per_day" value="{{ settings.minutes_per_day | hours }}" required>
+    </label>
+
+    <label>Kledijvergoeding per day (€):
+      <input type="text" name="clothing" value="{{ "%.2f"|format(settings.clothing_cents / 100) }}">
+    </label>
+
+    <label>Sunday premium per Sunday worked (€):
+      <input type="text" name="sunday_premium" value="{{ "%.2f"|format(settings.sunday_premium_cents / 100) }}">
+    </label>
+
+    <label>Social security / RSZ (% of gross):
+      <input type="text" name="rsz" value="{{ settings.rsz_bp | percent }}">
     </label>
 
     <label>Other monthly benefit (€):

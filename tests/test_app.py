@@ -420,5 +420,44 @@ class OverviewBadMonthTests(unittest.TestCase):
                 self.assertEqual(c.get(r.headers["Location"]).status_code, 200)
 
 
+class RealPayslipTests(unittest.TestCase):
+    """The user's October payslip (EUR 390.58) through the whole app."""
+
+    def setUp(self):
+        tmp = tempfile.mkdtemp()
+        self.app = create_app({"PASSWORD": "pw", "SECRET_KEY": "x" * 32,
+                               "DB_PATH": os.path.join(tmp, "t.db"), "HOST": "127.0.0.1", "PORT": 8080})
+        self.c = self.app.test_client()
+        self.c.get("/login")
+        self.post("/login", password="pw")
+
+    def post(self, url, **data):
+        with self.c.session_transaction() as s:
+            data["csrf_token"] = s["csrf"]
+        return self.c.post(url, data=data)
+
+    def settings(self):
+        return self.post("/settings", rate="15.97", allowance="3.68", clothing="2.20", sunday_premium="12",
+                         rsz="2.71", hours_per_day="7.5", other="", needs_pct="50", free_pct="20",
+                         save_pct="30", carry_over="1")
+
+    def test_october_payslip_total(self):
+        self.assertEqual(self.settings().status_code, 303)
+        r = self.post("/income", work_month="2026-10", days="3", hours_override="", sundays="2", holiday_hours="")
+        self.assertEqual(r.status_code, 303)
+        html = self.c.get("/?month=2026-11").get_data(as_text=True)
+        for expected in ("€390.58", "€383.33", "€372.94"):
+            self.assertIn(expected, html)
+
+    def test_sundays_cannot_exceed_days(self):
+        self.settings()
+        r = self.post("/income", work_month="2026-10", days="3", hours_override="", sundays="4", holiday_hours="")
+        self.assertEqual(r.status_code, 400)
+
+    def test_rsz_percent_roundtrip(self):
+        self.settings()
+        self.assertIn('value="2.71"', self.c.get("/settings").get_data(as_text=True))
+
+
 if __name__ == "__main__":
     unittest.main()

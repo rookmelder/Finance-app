@@ -60,35 +60,74 @@ def month_range(start: str, end: str) -> list[str]:
     return result
 
 
-def estimate_cents(
+def _half_up(numerator: int, denominator: int) -> int:
+    """Integer division rounding half up, for numerator >= 0 and denominator > 0."""
+    return (2 * numerator + denominator) // (2 * denominator)
+
+
+def estimate_breakdown(
     rate_cents: int,
     minutes_per_day: int,
     days: int,
     allowance_cents: int,
     other_cents: int = 0,
     minutes_override: int | None = None,
-) -> int:
+    clothing_cents: int = 0,
+    sundays: int = 0,
+    holiday_minutes: int = 0,
+    sunday_premium_cents: int = 0,
+    rsz_bp: int = 0,
+) -> dict:
+    """Estimate a month's pay the way the payslip does (all values integer cents).
+
+    hours_pay     = half_up(rate * minutes / 60), minutes = override or days * minutes_per_day
+    holiday_extra = half_up(rate * holiday_minutes / 60)   (a holiday is paid double: the extra 1x)
+    sunday_pay    = sundays * sunday_premium_cents
+    gross         = hours_pay + holiday_extra + sunday_pay  (the RSZ base)
+    rsz           = half_up(gross * rsz_bp / 10000)         (social security, basis points: 271 = 2.71%)
+    net           = gross - rsz
+    allowances    = days * (allowance_cents + clothing_cents)   (fiets + kledij, no RSZ on these)
+    total         = net + allowances + other_cents          (what lands on the bank account)
     """
-    minutes = minutes_override if not None else days * minutes_per_day
-    hours_pay = round_half_up(rate_cents * minutes / 60)
-    return hours_pay + days * allowance_cents + other_cents
-    """
+    values = {
+        "rate_cents": rate_cents, "minutes_per_day": minutes_per_day, "days": days,
+        "allowance_cents": allowance_cents, "other_cents": other_cents,
+        "clothing_cents": clothing_cents, "sundays": sundays,
+        "holiday_minutes": holiday_minutes, "sunday_premium_cents": sunday_premium_cents,
+    }
     if minutes_override is not None:
-        minutes = minutes_override
-    else:
-        minutes = days * minutes_per_day
+        values["minutes_override"] = minutes_override
+    for name, value in values.items():
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"{name} must be an integer >= 0")
+    if not isinstance(rsz_bp, int) or isinstance(rsz_bp, bool) or not 0 <= rsz_bp <= 10000:
+        raise ValueError("rsz_bp must be an integer between 0 and 10000")
 
-    # round half up: (2*a + b) // (2*b) for positive ints
-    # hours_pay = (rate_cents * minutes) / 60
-    numerator = rate_cents * minutes
-    denominator = 60
-    if numerator >= 0:
-        hours_pay = (2 * numerator + denominator) // (2 * denominator)
-    else:
-        # For completeness if negative rate/minutes
-        hours_pay = -((2 * (-numerator) + denominator) // (2 * denominator))
+    minutes = minutes_override if minutes_override is not None else days * minutes_per_day
+    hours_pay = _half_up(rate_cents * minutes, 60)
+    holiday_extra = _half_up(rate_cents * holiday_minutes, 60)
+    sunday_pay = sundays * sunday_premium_cents
+    gross = hours_pay + holiday_extra + sunday_pay
+    rsz = _half_up(gross * rsz_bp, 10000)
+    net = gross - rsz
+    allowances = days * (allowance_cents + clothing_cents)
+    return {
+        "minutes": minutes,
+        "hours_pay": hours_pay,
+        "holiday_extra": holiday_extra,
+        "sunday_pay": sunday_pay,
+        "gross": gross,
+        "rsz": rsz,
+        "net": net,
+        "allowances": allowances,
+        "other": other_cents,
+        "total": net + allowances + other_cents,
+    }
 
-    return hours_pay + days * allowance_cents + other_cents
+
+def estimate_cents(*args, **kwargs) -> int:
+    """Total estimated pay in cents; same arguments as estimate_breakdown."""
+    return estimate_breakdown(*args, **kwargs)["total"]
 
 
 def split_income(
@@ -242,3 +281,22 @@ def budget_chain(
         prev_free_available = free_available
 
     return result
+
+
+def parse_percent_bp(text: str) -> int:
+    """"2.71" or "2,71" or "2.71%" -> 271 basis points (1% = 100); up to 2 decimals, 0-100."""
+    if not isinstance(text, str):
+        raise ValueError("Expected string input")
+    s = text.strip().rstrip("%").strip().replace(",", ".")
+    if not re.fullmatch(r"[0-9]+(\.[0-9]{1,2})?", s):
+        raise ValueError(f"Invalid percentage: {text!r}")
+    bp = int(Decimal(s) * 100)
+    if bp > 10000:
+        raise ValueError("Percentage cannot be more than 100")
+    return bp
+
+
+def format_percent_bp(bp: int) -> str:
+    """271 -> "2.71", 250 -> "2.5", 0 -> "0"."""
+    s = f"{bp // 100}.{bp % 100:02d}".rstrip("0").rstrip(".")
+    return s

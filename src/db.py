@@ -22,6 +22,13 @@ def _validate_iso_date(d: str) -> str:
     return d
 
 
+def _add_missing_columns(conn: sqlite3.Connection, table: str, columns: dict) -> None:
+    have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for name, ddl in columns.items():  # table/column names are constants above, never user input
+        if name not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
 def connect(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -38,7 +45,10 @@ def connect(path: str) -> sqlite3.Connection:
                 needs_pct INTEGER NOT NULL,
                 free_pct INTEGER NOT NULL,
                 save_pct INTEGER NOT NULL,
-                carry_over INTEGER NOT NULL
+                carry_over INTEGER NOT NULL,
+                clothing_cents INTEGER NOT NULL DEFAULT 0,
+                sunday_premium_cents INTEGER NOT NULL DEFAULT 1200,
+                rsz_bp INTEGER NOT NULL DEFAULT 271
             )
         """)
         conn.execute("""
@@ -54,7 +64,12 @@ def connect(path: str) -> sqlite3.Connection:
                 other_cents INTEGER NOT NULL,
                 needs_pct INTEGER NOT NULL,
                 free_pct INTEGER NOT NULL,
-                save_pct INTEGER NOT NULL
+                save_pct INTEGER NOT NULL,
+                sundays INTEGER NOT NULL DEFAULT 0,
+                holiday_minutes INTEGER NOT NULL DEFAULT 0,
+                clothing_cents INTEGER NOT NULL DEFAULT 0,
+                sunday_premium_cents INTEGER NOT NULL DEFAULT 1200,
+                rsz_bp INTEGER NOT NULL DEFAULT 271
             )
         """)
         conn.execute("""
@@ -77,6 +92,19 @@ def connect(path: str) -> sqlite3.Connection:
                 note TEXT NOT NULL
             )
         """)
+        # Migrate databases made before these columns existed
+        _add_missing_columns(conn, "settings", {
+            "clothing_cents": "INTEGER NOT NULL DEFAULT 0",
+            "sunday_premium_cents": "INTEGER NOT NULL DEFAULT 1200",
+            "rsz_bp": "INTEGER NOT NULL DEFAULT 271",
+        })
+        _add_missing_columns(conn, "income", {
+            "sundays": "INTEGER NOT NULL DEFAULT 0",
+            "holiday_minutes": "INTEGER NOT NULL DEFAULT 0",
+            "clothing_cents": "INTEGER NOT NULL DEFAULT 0",
+            "sunday_premium_cents": "INTEGER NOT NULL DEFAULT 1200",
+            "rsz_bp": "INTEGER NOT NULL DEFAULT 271",
+        })
         # Insert default settings if missing
         conn.execute("""
             INSERT OR IGNORE INTO settings (
@@ -97,7 +125,8 @@ def get_settings(conn: sqlite3.Connection) -> dict[str, Any]:
 def update_settings(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
     allowed_fields = {
         "rate_cents", "allowance_cents", "minutes_per_day",
-        "other_cents", "needs_pct", "free_pct", "save_pct", "carry_over"
+        "other_cents", "needs_pct", "free_pct", "save_pct", "carry_over",
+        "clothing_cents", "sunday_premium_cents", "rsz_bp",
     }
     for k in fields:
         if k not in allowed_fields:
@@ -107,7 +136,7 @@ def update_settings(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
     merged = {**current, **fields}
 
     # Validation
-    for cent_field in ("rate_cents", "allowance_cents", "other_cents"):
+    for cent_field in ("rate_cents", "allowance_cents", "other_cents", "clothing_cents", "sunday_premium_cents"):
         val = merged[cent_field]
         if not isinstance(val, int) or isinstance(val, bool) or val < 0:
             raise ValueError(f"{cent_field} must be integer >= 0")
@@ -123,6 +152,10 @@ def update_settings(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
 
     if merged["needs_pct"] + merged["free_pct"] + merged["save_pct"] != 100:
         raise ValueError("Percentages must sum to 100")
+
+    rsz = merged["rsz_bp"]
+    if not isinstance(rsz, int) or isinstance(rsz, bool) or rsz < 0 or rsz > 10000:
+        raise ValueError("rsz_bp must be an integer between 0 and 10000")
 
     carry = merged["carry_over"]
     if isinstance(carry, bool):
@@ -141,7 +174,10 @@ def update_settings(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
                 needs_pct = ?,
                 free_pct = ?,
                 save_pct = ?,
-                carry_over = ?
+                carry_over = ?,
+                clothing_cents = ?,
+                sunday_premium_cents = ?,
+                rsz_bp = ?
             WHERE id = 1
         """, (
             merged["rate_cents"],
@@ -151,9 +187,16 @@ def update_settings(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
             merged["needs_pct"],
             merged["free_pct"],
             merged["save_pct"],
-            merged["carry_over"]
+            merged["carry_over"],
+            merged["clothing_cents"],
+            merged["sunday_premium_cents"],
+            merged["rsz_bp"],
         ))
     return get_settings(conn)
+
+
+_SNAPSHOT = ("rate_cents", "allowance_cents", "minutes_per_day", "other_cents", "needs_pct",
+             "free_pct", "save_pct", "clothing_cents", "sunday_premium_cents", "rsz_bp")
 
 
 def save_income(
@@ -161,72 +204,51 @@ def save_income(
     work_month: str,
     days: int,
     minutes_override: Optional[int] = None,
-    refresh_snapshot: bool = False
+    refresh_snapshot: bool = False,
+    sundays: int = 0,
+    holiday_minutes: int = 0,
 ) -> dict[str, Any]:
     pay_m = calc.pay_month(work_month)
 
-    if not isinstance(days, int) or isinstance(days, bool) or days < 0 or days > 31:
+    def bad_int(v, lo, hi):
+        return not isinstance(v, int) or isinstance(v, bool) or v < lo or v > hi
+
+    if bad_int(days, 0, 31):
         raise ValueError("days must be integer between 0 and 31")
+    if minutes_override is not None and bad_int(minutes_override, 0, 44640):
+        raise ValueError("minutes_override must be None or integer between 0 and 44640")
+    if bad_int(sundays, 0, 31):
+        raise ValueError("sundays must be integer between 0 and 31")
+    if sundays > days:
+        raise ValueError("sundays cannot be more than days worked")
+    if bad_int(holiday_minutes, 0, 44640):
+        raise ValueError("holiday_minutes must be integer between 0 and 44640")
 
-    if minutes_override is not None:
-        if not isinstance(minutes_override, int) or isinstance(minutes_override, bool) or minutes_override < 0 or minutes_override > 44640:
-            raise ValueError("minutes_override must be None or integer between 0 and 44640")
-
-    existing = conn.execute("SELECT * FROM income WHERE pay_month = ?", (pay_m,)).fetchone()
-    current_settings = get_settings(conn)
+    existing = conn.execute("SELECT 1 FROM income WHERE pay_month = ?", (pay_m,)).fetchone()
+    current = get_settings(conn)
+    snap = [current[k] for k in _SNAPSHOT]
 
     with conn:
         if existing is None:
-            conn.execute("""
-                INSERT INTO income (
-                    pay_month, work_month, days, minutes_override, actual_cents,
-                    rate_cents, allowance_cents, minutes_per_day,
-                    other_cents, needs_pct, free_pct, save_pct
-                ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                pay_m, work_month, days, minutes_override,
-                current_settings["rate_cents"],
-                current_settings["allowance_cents"],
-                current_settings["minutes_per_day"],
-                current_settings["other_cents"],
-                current_settings["needs_pct"],
-                current_settings["free_pct"],
-                current_settings["save_pct"]
-            ))
+            conn.execute(
+                "INSERT INTO income (pay_month, work_month, days, minutes_override, actual_cents,"
+                " sundays, holiday_minutes, " + ", ".join(_SNAPSHOT) + ")"
+                " VALUES (?, ?, ?, ?, NULL, ?, ?, " + ", ".join("?" for _ in _SNAPSHOT) + ")",
+                [pay_m, work_month, days, minutes_override, sundays, holiday_minutes, *snap],
+            )
+        elif refresh_snapshot:
+            conn.execute(
+                "UPDATE income SET work_month = ?, days = ?, minutes_override = ?, sundays = ?,"
+                " holiday_minutes = ?, " + ", ".join(k + " = ?" for k in _SNAPSHOT) +
+                " WHERE pay_month = ?",
+                [work_month, days, minutes_override, sundays, holiday_minutes, *snap, pay_m],
+            )
         else:
-            if refresh_snapshot:
-                conn.execute("""
-                    UPDATE income SET
-                        work_month = ?,
-                        days = ?,
-                        minutes_override = ?,
-                        rate_cents = ?,
-                        allowance_cents = ?,
-                        minutes_per_day = ?,
-                        other_cents = ?,
-                        needs_pct = ?,
-                        free_pct = ?,
-                        save_pct = ?
-                    WHERE pay_month = ?
-                """, (
-                    work_month, days, minutes_override,
-                    current_settings["rate_cents"],
-                    current_settings["allowance_cents"],
-                    current_settings["minutes_per_day"],
-                    current_settings["other_cents"],
-                    current_settings["needs_pct"],
-                    current_settings["free_pct"],
-                    current_settings["save_pct"],
-                    pay_m
-                ))
-            else:
-                conn.execute("""
-                    UPDATE income SET
-                        work_month = ?,
-                        days = ?,
-                        minutes_override = ?
-                    WHERE pay_month = ?
-                """, (work_month, days, minutes_override, pay_m))
+            conn.execute(
+                "UPDATE income SET work_month = ?, days = ?, minutes_override = ?, sundays = ?,"
+                " holiday_minutes = ? WHERE pay_month = ?",
+                [work_month, days, minutes_override, sundays, holiday_minutes, pay_m],
+            )
 
     return get_income(conn, pay_m)  # type: ignore
 

@@ -16,11 +16,19 @@
     <p class="help-text">Pay month will be <strong>{{ default_pm }}</strong> (next month).</p>
 
     <label>Days worked:
-      <input type="number" name="days" value="18" min="0" max="31" required>
+      <input type="number" name="days" min="0" max="31" required>
     </label>
 
     <label>Total hours override (optional):
       <input type="text" name="hours_override" placeholder="e.g. 135 or 7.5">
+    </label>
+
+    <label>Sundays worked:
+      <input type="number" name="sundays" value="0" min="0" max="31">
+    </label>
+
+    <label>Holiday hours worked (paid double, optional):
+      <input type="text" name="holiday_hours" placeholder="e.g. 7.5">
     </label>
 
     <button type="submit">Add Income</button>
@@ -36,6 +44,7 @@
           <th>Pay Month</th>
           <th>Work Month</th>
           <th>Days</th>
+          <th>Sun</th>
           <th>Estimate</th>
           <th>Actual</th>
           <th>Used</th>
@@ -48,6 +57,7 @@
           <td><strong>{{ inc.pay_month }}</strong></td>
           <td>{{ inc.work_month }}</td>
           <td>{{ inc.days }}</td>
+          <td>{{ inc.sundays }}</td>
           <td>{{ inc.estimate | money }}</td>
           <td>{% if inc.actual_cents is not none %}{{ inc.actual_cents | money }}{% else %}-{% endif %}</td>
           <td><span class="badge badge-{{ inc.used }}">{{ inc.used }}</span></td>
@@ -55,7 +65,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="7">No income records yet.</td>
+          <td colspan="8">No income records yet.</td>
         </tr>
         {% endfor %}
       </tbody>

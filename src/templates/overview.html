@@ -53,6 +53,7 @@
         <span class="value"><strong>{{ income_amount | money }}</strong> ({{ income_used }})</span>
       </div>
     </div>
+    {% include "_breakdown.html" %}
     <div class="card-links">
       <a href="{{ url_for('income_edit', pay_month=month) }}">Edit Income</a>
     </div>

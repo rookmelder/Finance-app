@@ -1,0 +1,11 @@
+<div class="stat-grid">
+  <div class="stat"><span class="label">Hours ({{ breakdown.minutes | hours }} h):</span><span class="value">{{ breakdown.hours_pay | money }}</span></div>
+  {% if breakdown.holiday_extra %}<div class="stat"><span class="label">Holiday extra:</span><span class="value">{{ breakdown.holiday_extra | money }}</span></div>{% endif %}
+  {% if breakdown.sunday_pay %}<div class="stat"><span class="label">Sunday premium:</span><span class="value">{{ breakdown.sunday_pay | money }}</span></div>{% endif %}
+  <div class="stat"><span class="label">Gross:</span><span class="value">{{ breakdown.gross | money }}</span></div>
+  <div class="stat"><span class="label">RSZ:</span><span class="value neg">-{{ breakdown.rsz | money }}</span></div>
+  <div class="stat"><span class="label">Net:</span><span class="value">{{ breakdown.net | money }}</span></div>
+  <div class="stat"><span class="label">Fiets + kledij:</span><span class="value">{{ breakdown.allowances | money }}</span></div>
+  {% if breakdown.other %}<div class="stat"><span class="label">Other:</span><span class="value">{{ breakdown.other | money }}</span></div>{% endif %}
+  <div class="stat highlight-stat"><span class="label">Estimated total:</span><span class="value"><strong>{{ breakdown.total | money }}</strong></span></div>
+</div>

@@ -265,5 +265,52 @@ class UnicodeDigitTests(unittest.TestCase):
                 pay_month(bad + "-01")
 
 
+class PayslipTests(unittest.TestCase):
+    """Golden cases from the user's real payslips (cents)."""
+
+    def test_october_payslip(self):
+        # 3 days, 22:30 h at 15.97, 2 Sundays at 12.00, RSZ 2.71%, fiets 3.68/day, kledij 2.20/day
+        from src.calc import estimate_breakdown
+        r = estimate_breakdown(1597, 450, 3, 368, clothing_cents=220, sundays=2,
+                               sunday_premium_cents=1200, rsz_bp=271)
+        self.assertEqual(r["hours_pay"], 35933)
+        self.assertEqual(r["sunday_pay"], 2400)
+        self.assertEqual(r["gross"], 38333)
+        self.assertEqual(r["rsz"], 1039)
+        self.assertEqual(r["net"], 37294)
+        self.assertEqual(r["allowances"], 1764)
+        self.assertEqual(r["total"], 39058)
+
+    def test_december_eight_days_no_extras(self):
+        from src.calc import estimate_breakdown
+        r = estimate_breakdown(1597, 450, 8, 368, clothing_cents=220,
+                               sunday_premium_cents=1200, rsz_bp=271)
+        self.assertEqual(r["hours_pay"], 95820)
+        self.assertEqual(r["rsz"], 2597)
+        self.assertEqual(r["net"], 93223)
+        self.assertEqual(r["total"], 97927)
+
+    def test_november_with_sunday_and_holiday(self):
+        # 7 days, 50.5 h total (2 days one hour short), 1 Sunday, 1 holiday of 7.5 h paid double
+        from src.calc import estimate_breakdown
+        r = estimate_breakdown(1597, 450, 7, 368, clothing_cents=220, sundays=1,
+                               holiday_minutes=450, sunday_premium_cents=1200, rsz_bp=271,
+                               minutes_override=3030)
+        self.assertEqual(r["hours_pay"], 80649)       # 50.5 h * 15.97 = 806.485 -> half up
+        self.assertEqual(r["holiday_extra"], 11978)   # 7.5 h * 15.97 = 119.775 -> half up
+        self.assertEqual(r["gross"], 80649 + 11978 + 1200)
+        self.assertEqual(r["total"], r["net"] + 7 * 588)
+
+    def test_new_args_validated(self):
+        from src.calc import estimate_breakdown
+        with self.assertRaises(ValueError):
+            estimate_breakdown(1597, 450, 3, 368, rsz_bp=10001)
+        with self.assertRaises(ValueError):
+            estimate_breakdown(1597, 450, 3, 368, sundays=-1)
+
+    def test_estimate_cents_defaults_unchanged(self):
+        self.assertEqual(estimate_cents(1400, 450, 18, 400), 196200)
+
+
 if __name__ == "__main__":
     unittest.main()

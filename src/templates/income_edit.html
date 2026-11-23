@@ -45,6 +45,11 @@
 </section>
 
 <section class="card">
+  <h2>Estimate</h2>
+  {% include "_breakdown.html" %}
+</section>
+
+<section class="card">
   <h2>Update Days / Override</h2>
   <form method="post" action="{{ url_for('income_edit', pay_month=income.pay_month) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -58,9 +63,17 @@
       <input type="text" name="hours_override" value="{% if income.minutes_override is not none %}{{ income.minutes_override | hours }}{% endif %}" placeholder="e.g. 135">
     </label>
 
+    <label>Sundays worked:
+      <input type="number" name="sundays" value="{{ income.sundays }}" min="0" max="31">
+    </label>
+
+    <label>Holiday hours worked (paid double, optional):
+      <input type="text" name="holiday_hours" value="{% if income.holiday_minutes %}{{ income.holiday_minutes | hours }}{% endif %}" placeholder="e.g. 7.5">
+    </label>
+
     <label class="checkbox-label">
       <input type="checkbox" name="refresh_snapshot" value="1">
-      Use current settings (refresh rate, allowance and percentages snapshot)
+      Use current settings (refresh rate, allowances, premium, RSZ and percentages)
     </label>
 
     <button type="submit">Save Changes</button>
