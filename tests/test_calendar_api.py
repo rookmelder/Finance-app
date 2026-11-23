@@ -120,5 +120,31 @@ class CalendarApiTests(unittest.TestCase):
         self.assertEqual(db.get_income(conn, "2026-10")["per_day"], 0)
 
 
+    def test_edit_page_has_no_dead_forms_and_refresh_snapshot_works(self):
+        self.save("2026-10", self.OCT)
+        html = self.c.get("/income/2026-11").get_data(as_text=True)
+        self.assertNotIn('value="save"', html)
+        self.assertIn('value="refresh_snapshot"', html)
+        self.assertIn("/calendar/2026-10", html)
+        self.form("/settings", rate="20.00", allowance="3.68", clothing="2.20", rsz="2.71",
+                  hours_per_day="7.5", other="", needs_pct="50", free_pct="20", save_pct="30",
+                  carry_over="1", sunday_per_hour="2", sunday_cap_hours="6")
+        conn = db.connect(self.path)
+        self.assertEqual(db.get_income(conn, "2026-11")["rate_cents"], 1597)
+        r = self.form("/income/2026-11", action="refresh_snapshot")
+        self.assertEqual(r.status_code, 303)
+        self.assertEqual(db.get_income(conn, "2026-11")["rate_cents"], 2000)
+        r = self.form("/income/2026-11", action="save", days="3")
+        self.assertEqual(r.status_code, 400)  # old action is gone
+
+    def test_add_by_totals_refused_on_calendar_month(self):
+        self.save("2026-10", self.OCT)
+        r = self.form("/income", work_month="2026-10", days="5", hours_override="", sundays="0", holiday_hours="")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("calendar", r.get_data(as_text=True))
+        conn = db.connect(self.path)
+        self.assertEqual(db.get_income(conn, "2026-11")["days"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()

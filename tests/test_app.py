@@ -437,7 +437,7 @@ class RealPayslipTests(unittest.TestCase):
         return self.c.post(url, data=data)
 
     def settings(self):
-        return self.post("/settings", rate="15.97", allowance="3.68", clothing="2.20", sunday_premium="12",
+        return self.post("/settings", rate="15.97", allowance="3.68", clothing="2.20", sunday_per_hour="2", sunday_cap_hours="6",
                          rsz="2.71", hours_per_day="7.5", other="", needs_pct="50", free_pct="20",
                          save_pct="30", carry_over="1")
 

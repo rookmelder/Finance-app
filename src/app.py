@@ -332,7 +332,9 @@ def create_app(cfg: dict) -> Flask:
             override_str = request.form.get("hours_override", "").strip()
 
             try:
-                calc.pay_month(work_month)
+                existing_row = db.get_income(conn, calc.pay_month(work_month))
+                if existing_row is not None and existing_row["per_day"]:
+                    raise ValueError("This month uses the calendar. Edit its days there.")
                 try:
                     days = int(days_str)
                 except (ValueError, TypeError):

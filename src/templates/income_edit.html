@@ -50,33 +50,18 @@
 </section>
 
 <section class="card">
-  <h2>Update Days / Override</h2>
+  <h2>Days and hours</h2>
+  <p>Edit the worked days of {{ income.work_month }} on the calendar.</p>
+  <p><a class="btn" href="{{ url_for('calendar_page', work_month=income.work_month) }}">Open calendar</a></p>
+</section>
+
+<section class="card">
+  <h2>Rates snapshot</h2>
+  <p>This month keeps the rates it had when it was created. Use this after changing your settings.</p>
   <form method="post" action="{{ url_for('income_edit', pay_month=income.pay_month) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="action" value="save">
-
-    <label>Days worked:
-      <input type="number" name="days" value="{{ income.days }}" min="0" max="31" required>
-    </label>
-
-    <label>Hours override (optional):
-      <input type="text" name="hours_override" value="{% if income.minutes_override is not none %}{{ income.minutes_override | hours }}{% endif %}" placeholder="e.g. 135">
-    </label>
-
-    <label>Sundays worked:
-      <input type="number" name="sundays" value="{{ income.sundays }}" min="0" max="31">
-    </label>
-
-    <label>Holiday hours worked (paid double, optional):
-      <input type="text" name="holiday_hours" value="{% if income.holiday_minutes %}{{ income.holiday_minutes | hours }}{% endif %}" placeholder="e.g. 7.5">
-    </label>
-
-    <label class="checkbox-label">
-      <input type="checkbox" name="refresh_snapshot" value="1">
-      Use current settings (refresh rate, allowances, premium, RSZ and percentages)
-    </label>
-
-    <button type="submit">Save Changes</button>
+    <input type="hidden" name="action" value="refresh_snapshot">
+    <button type="submit">Use current settings for this month</button>
   </form>
 </section>
 
