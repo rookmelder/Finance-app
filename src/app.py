@@ -211,7 +211,9 @@ def _google_view(conn):
 
     row = db.get_google(conn)
     client_id = cfg["client_id"] if source != "env" else app_cfg.get("GOOGLE_CLIENT_ID", "")
-    suggested = "https://" + request.host + "/google/callback" if request else ""
+    # Google allows plain http only for localhost; everything else must be https
+    local = request.host.split(":")[0] in ("localhost", "127.0.0.1")
+    suggested = ("http://" if local else "https://") + request.host + "/google/callback"
 
     return {
         "message": msg,

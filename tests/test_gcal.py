@@ -606,8 +606,6 @@ class TestGoogleSettingsRoutes(GoogleRoutesBase):
         self.assertEqual(c.post("/google/options").status_code, 400)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
     def test_new_client_id_needs_new_secret(self):
         c = self.make_app(google=False)
@@ -632,3 +630,20 @@ if __name__ == "__main__":
                                             "holiday_color": "2"})
         self.assertEqual(r.status_code, 400)
         self.assertIn("Weekdays to: enter a time like 07:30", r.get_data(as_text=True))
+
+    def test_suggested_redirect_is_http_only_on_localhost(self):
+        c = self.make_app(google=False)
+        html = c.get("/settings", base_url="http://localhost:8080").get_data(as_text=True)
+        self.assertIn('value="http://localhost:8080/google/callback"', html)
+        # a real domain gets https (build the view directly: test-client cookies are per host)
+        from src.app import _google_view, get_db
+        app = create_app({"PASSWORD": "pw", "SECRET_KEY": "x" * 32, "DB_PATH": self.db_path, "HOST": "127.0.0.1",
+                          "PORT": 8080})
+        with app.test_request_context("/settings", base_url="http://fin.example"):
+            self.assertEqual(_google_view(get_db())["suggested_redirect"], "https://fin.example/google/callback")
+        with app.test_request_context("/settings", base_url="http://127.0.0.1:8080"):
+            self.assertEqual(_google_view(get_db())["suggested_redirect"], "http://127.0.0.1:8080/google/callback")
+
+
+if __name__ == "__main__":
+    unittest.main()
