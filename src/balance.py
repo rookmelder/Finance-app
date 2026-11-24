@@ -11,6 +11,9 @@ from datetime import date
 from src import calc, db
 
 
+_KIND_ORDER = {"pay": 0, "pay_adjust": 1, "recurring": 2, "expense": 3}
+
+
 def last_day_of_month(month):
     """Return the last ISO date of a YYYY-MM month."""
     first = date.fromisoformat(month + "-01")
@@ -28,11 +31,15 @@ def _latest_set(events, today):
 
 
 def _anchor(row, events):
-    prefix = str(row["id"]) + ":"
-    days = [int(row["next_due"][8:])]
-    days.extend(int(e["date"][8:]) for e in events
-                if e["kind"] == "recurring" and e["ref"].startswith(prefix))
-    return max(days)
+    """Day of month a recurring cost keeps. It is the day of next_due, unless next_due sits on the last
+    day of its month (a possible month-end clamp): then the day of the latest posted event is used if larger."""
+    day = int(row["next_due"][8:])
+    if row["next_due"] == last_day_of_month(row["next_due"][:7]):
+        prefix = str(row["id"]) + ":"
+        posted = [e for e in events if e["kind"] == "recurring" and e["ref"].startswith(prefix)]
+        if posted:
+            day = max(day, int(max(posted, key=lambda e: e["id"])["date"][8:]))
+    return day
 
 
 def settle(conn, today, income_amount):
@@ -87,6 +94,8 @@ def set_balance(conn, amount_cents, today, income_amount, note=""):
     """Set an absolute balance after settling the preceding segment."""
     if not isinstance(amount_cents, int) or isinstance(amount_cents, bool):
         raise ValueError("amount_cents must be an integer")
+    if abs(amount_cents) > 100_000_000_000:  # 1 billion euros: far beyond any bank account, and SQLite-safe
+        raise ValueError("amount_cents is out of range")
     date.fromisoformat(today)
     settle(conn, today, income_amount)
     return db.add_balance_event(conn, today, "set", amount_cents,
@@ -120,7 +129,7 @@ def history(conn, today):
             changes.append({**expense, "kind": "expense",
                             "amount_cents": -expense["amount_cents"]})
         ordered = [start] + sorted(changes, key=lambda e: (
-            e["date"], e["kind"] == "expense", e["id"]))
+            e["date"], _KIND_ORDER.get(e["kind"], 9), e["id"]))
         for event in ordered:
             delta = event["amount_cents"] - running if event["kind"] == "set" else event["amount_cents"]
             running += delta

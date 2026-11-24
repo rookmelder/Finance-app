@@ -591,7 +591,7 @@ def create_app(cfg: dict) -> Flask:
         elif text.startswith("-€"):
             text = "-" + text[2:]
         try:
-            if not re.fullmatch(r"-?[0-9]+(?:[.,][0-9]{1,2})?", text) or len(note) > 80:
+            if not re.fullmatch(r"-?[0-9]{1,9}(?:[.,][0-9]{1,2})?", text) or len(note) > 80:
                 raise ValueError("Invalid bank balance")
             negative = text.startswith("-")
             amount = calc.parse_money(text[1:] if negative else text)

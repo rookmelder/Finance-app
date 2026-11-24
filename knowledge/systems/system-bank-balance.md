@@ -25,5 +25,6 @@ Month-end leftovers never reset the balance. The settings toggle "carry leftover
 - Subscriptions without a next_due are not subtracted; logging a subscription also as an expense would count it twice.
 
 ## Known issues
-- A monthly cost whose due day is clamped at a month end keeps its original day only within one settle run (it can drift to the clamped day across runs).
+- A monthly cost keeps the day of its `next_due`; only when `next_due` sits on a month's last day the day of the latest posted event is used, so a 31st clamped to the 28th recovers. Editing next_due to another day moves the cost to that day.
+- Amounts are limited to 9 digits of euros (and 100 000 000 000 cents in `set_balance`).
 - Deleting an income row or an expense later changes the computed history from that point (ledger events for pay/subscriptions stay).

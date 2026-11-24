@@ -93,7 +93,8 @@ class BalanceUITests(unittest.TestCase):
         db.add_recurring(self.conn, name="Due cost", amount_cents=100,
                          every_months=1, next_due="2026-02-01")
         before = db.list_balance_events(self.conn)
-        for text in ("abc", "", "1e3", "1.234,50", "1,234.50", "--20", "+20", "€€15"):
+        for text in ("abc", "", "1e3", "1.234,50", "1,234.50", "--20", "+20", "€€15",
+                     "9" * 30, "-" + "9" * 10, "1234567890"):
             with self.subTest(amount=text):
                 response = self.post("/balance/set", amount=text)
                 self.assertEqual(response.status_code, 303)
