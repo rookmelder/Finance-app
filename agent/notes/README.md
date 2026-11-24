@@ -29,3 +29,4 @@ Not here: rules for the Lead or workers (`CLAUDE.md`, `agent/bases/`, `agent/rol
 - [Shopkeeper benchmark: real tasks per role (2026-11-17)](2026-11-17-shopkeeper-benchmark.md): Seven real tasks on a shop project; made harder after Flash Low scored 55/57: now Low 58/68, Medium 62/68 (tester separates them).
 - [Codex smoke test and benchmark (2026-11-18)](2026-11-18-codex-smoke-test-and-bench.md): Smoke tests pass; Codex workers cannot read files (only --include); best on tester/security, fail debug and tasks needing unpasted files.
 - [Codex fails on Ubuntu 24.04 VM](2026-11-23-codex-fails-on-ubuntu-24-04-vm.md): AppArmor blocks its sandbox; agy only until fixed.
+- [Codex fixed with system bwrap (2026-11-24)](2026-11-24-codex-fixed-system-bwrap.md): apt bubblewrap + AppArmor profile for /usr/bin/bwrap; smoke tests 1-2 pass again.
