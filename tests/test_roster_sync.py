@@ -22,6 +22,8 @@ class FakeGmail:
         self.get_message_error = None
         self.get_attachment_error = None
         self.recorded_queries = []
+        self.get_message_calls = []
+        self.get_attachment_calls = []
 
     def search(self, query, limit=30):
         self.recorded_queries.append((query, limit))
@@ -30,11 +32,13 @@ class FakeGmail:
         return list(self.messages.keys())[:limit]
 
     def get_message(self, message_id):
+        self.get_message_calls.append(message_id)
         if self.get_message_error:
             raise self.get_message_error
         return self.messages[message_id]
 
     def get_attachment(self, message_id, attachment_id):
+        self.get_attachment_calls.append((message_id, attachment_id))
         if self.get_attachment_error:
             raise self.get_attachment_error
         return self.attachments.get((message_id, attachment_id), b"")
@@ -800,6 +804,239 @@ class TestRosterSync(unittest.TestCase):
         self.assertIn("could not be read", res["months"][0]["detail"])
         self.assertEqual(len(res["errors"]), 1)
         self.assertEqual(db.list_days(self.conn, "2026-12"), [])
+
+
+    def _mail(self, mid, internal_date=1000):
+        return {
+            "id": mid,
+            "from": "planner@example.com",
+            "subject": "Roster " + mid,
+            "internal_date": internal_date,
+            "attachments": [
+                {"filename": "r.pdf", "mime_type": "application/pdf", "attachment_id": "a"}
+            ],
+        }
+
+    def _result(self, month="2026-12"):
+        return {
+            "month": month,
+            "days": [{"date": month + "-07", "minutes": 450, "code": "V", "start": 450, "end": 930}],
+            "legend": {"V": {"start": 450, "end": 930, "minutes": 450}},
+        }
+
+    def _sync_fake(self, gmail, **kwargs):
+        return sync(
+            self.conn, gmail, self.today,
+            extract_tokens=lambda data: data,
+            parse=lambda tokens, name: self._result(),
+            **kwargs,
+        )
+
+    def test_progress_two_mails_and_empty_search(self):
+        gmail = FakeGmail(messages={mid: self._mail(mid) for mid in ("p1", "p2")})
+        events = []
+        self._sync_fake(gmail, progress=lambda percent, text: events.append((percent, text)))
+        self.assertEqual(events, [
+            (2, "Searching your mail..."),
+            (10, "Reading mail 1 of 2..."),
+            (45, "Reading mail 2 of 2..."),
+            (85, "Updating your days..."),
+            (100, "Done"),
+        ])
+        self.assertEqual([p for p, text in events], sorted(p for p, text in events))
+        events.clear()
+        self._sync_fake(FakeGmail(), progress=lambda p, t: events.append((p, t)))
+        self.assertEqual(events, [(2, "Searching your mail..."),
+                                  (85, "Updating your days..."), (100, "Done")])
+
+    def test_progress_missing_config(self):
+        db.update_google_config(self.conn, roster_name="")
+        events = []
+        gmail = FakeGmail()
+        res = self._sync_fake(gmail, progress=lambda p, t: events.append((p, t)))
+        self.assertFalse(res["ok"])
+        self.assertEqual(events, [(100, "Done")])
+        self.assertEqual(gmail.recorded_queries, [])
+
+    def test_progress_gmail_errors_and_failed_mail_not_cached(self):
+        for source in ("search_error", "get_message_error", "get_attachment_error"):
+            with self.subTest(source=source):
+                gmail = FakeGmail(messages={source: self._mail(source)},
+                                  attachments={(source, "a"): b"%PDF-data"})
+                setattr(gmail, source, GmailError("Mail unavailable", 500))
+                for attempt in range(2):
+                    events = []
+                    res = self._sync_fake(gmail, progress=lambda p, t: events.append((p, t)))
+                    self.assertFalse(res["ok"])
+                    self.assertEqual(res["message"], "Mail unavailable")
+                    self.assertEqual(events[0], (2, "Searching your mail..."))
+                    self.assertEqual(events[-1], (100, "Done"))
+                    self.assertEqual([p for p, t in events], sorted(p for p, t in events))
+                    self.assertIsNone(db.get_roster_mail(self.conn, source, "planner@example.com", "Test Person"))
+                if source != "search_error":
+                    self.assertEqual(len(gmail.get_message_calls), 2)
+
+    def test_cached_roster_restores_cleared_days_without_gmail_calls(self):
+        gmail = FakeGmail(messages={"cached": self._mail("cached")},
+                          attachments={("cached", "a"): b"%PDF-data"})
+        first = self._sync_fake(gmail)
+        fields = ("date", "minutes", "holiday", "code", "start", "end")
+        expected_days = [tuple(day[field] for field in fields)
+                         for day in db.list_days(self.conn, "2026-12")]
+        db.save_month_days(self.conn, "2026-12", [])
+        gmail.get_message_calls.clear()
+        gmail.get_attachment_calls.clear()
+        second = self._sync_fake(gmail)
+        self.assertEqual(second["months"], first["months"])
+        self.assertEqual([tuple(day[field] for field in fields)
+                          for day in db.list_days(self.conn, "2026-12")], expected_days)
+        self.assertEqual(gmail.get_message_calls, [])
+        self.assertEqual(gmail.get_attachment_calls, [])
+        third = self._sync_fake(gmail)
+        fourth = self._sync_fake(gmail)
+        self.assertEqual(third["months"], fourth["months"])
+        self.assertEqual(third["months"][0]["status"], "unchanged")
+        self.assertEqual(gmail.get_message_calls, [])
+        self.assertEqual(gmail.get_attachment_calls, [])
+
+    def test_cache_depends_on_name_and_sender(self):
+        gmail = FakeGmail(messages={"config": self._mail("config")},
+                          attachments={("config", "a"): b"%PDF-data"})
+        self._sync_fake(gmail)
+        db.update_google_config(self.conn, roster_name="Another Person")
+        self._sync_fake(gmail)
+        self.assertEqual(len(gmail.get_message_calls), 2)
+        self.assertEqual(len(gmail.get_attachment_calls), 2)
+        db.update_google_config(self.conn, roster_sender="other@example.com")
+        gmail.messages["config"]["from"] = "other@example.com"
+        self._sync_fake(gmail)
+        self.assertEqual(len(gmail.get_message_calls), 3)
+        self.assertEqual(len(gmail.get_attachment_calls), 3)
+
+    def test_parse_and_pdf_errors_are_retried(self):
+        for error_type in (RosterError, PdfError):
+            with self.subTest(error_type=error_type):
+                mid = error_type.__name__
+                gmail = FakeGmail(messages={mid: self._mail(mid)},
+                                  attachments={(mid, "a"): b"%PDF-data"})
+
+                def fail(value, *args):
+                    raise error_type("Unreadable")
+
+                kwargs = {"extract_tokens": fail} if error_type is PdfError else {
+                    "extract_tokens": lambda data: data, "parse": fail,
+                }
+                first = sync(self.conn, gmail, self.today, **kwargs)
+                second = sync(self.conn, gmail, self.today, **kwargs)
+                self.assertEqual(first["errors"], ["Roster " + mid + ": Unreadable"])
+                self.assertEqual(second["errors"], first["errors"])
+                self.assertEqual(len(gmail.get_message_calls), 2)
+                self.assertEqual(len(gmail.get_attachment_calls), 2)
+                self.assertIsNone(db.get_roster_mail(self.conn, mid, "planner@example.com", "Test Person"))
+
+    def test_two_verified_pdfs_are_not_cached(self):
+        mail = self._mail("multi")
+        mail["attachments"].append({"filename": "second.pdf", "attachment_id": "b"})
+        gmail = FakeGmail(messages={"multi": mail}, attachments={
+            ("multi", "a"): b"%PDF-first", ("multi", "b"): b"%PDF-second",
+        })
+        self._sync_fake(gmail)
+        self._sync_fake(gmail)
+        self.assertEqual(len(gmail.get_message_calls), 2)
+        self.assertEqual(len(gmail.get_attachment_calls), 4)
+        self.assertIsNone(db.get_roster_mail(self.conn, "multi", "planner@example.com", "Test Person"))
+
+    def test_skip_and_ignored_cached(self):
+        messages = {mid: self._mail(mid) for mid in ("sender", "empty", "bytes", "ignored")}
+        messages["sender"]["from"] = "impostor@example.com"
+        messages["empty"]["attachments"] = []
+        gmail = FakeGmail(messages=messages, attachments={
+            ("bytes", "a"): b"Not PDF", ("ignored", "a"): b"%PDF-report",
+        })
+
+        def not_roster(tokens, name):
+            raise NotARoster("Annual report")
+
+        first = sync(self.conn, gmail, self.today, extract_tokens=lambda data: data, parse=not_roster)
+        for mid in messages:
+            cached = db.get_roster_mail(self.conn, mid, "planner@example.com", "Test Person")
+            self.assertEqual(cached["kind"], "ignored" if mid == "ignored" else "skip")
+        gmail.get_message_calls.clear()
+        gmail.get_attachment_calls.clear()
+        second = sync(self.conn, gmail, self.today, extract_tokens=lambda data: data, parse=not_roster)
+        self.assertEqual(second, first)
+        self.assertEqual(second["ignored"], 1)
+        self.assertEqual(gmail.get_message_calls, [])
+        self.assertEqual(gmail.get_attachment_calls, [])
+
+    def test_one_verified_pdf_with_non_pdf_attachment_is_cached(self):
+        mail = self._mail("mixed")
+        mail["attachments"].append({"filename": "fake.pdf", "attachment_id": "b"})
+        gmail = FakeGmail(messages={"mixed": mail}, attachments={
+            ("mixed", "a"): b"%PDF-roster", ("mixed", "b"): b"HTML",
+        })
+        self._sync_fake(gmail)
+        self._sync_fake(gmail)
+        self.assertEqual(len(gmail.get_message_calls), 1)
+        self.assertEqual(len(gmail.get_attachment_calls), 2)
+
+    def test_only_month_past_month_filter_query_and_messages(self):
+        gmail = FakeGmail(messages={mid: self._mail(mid) for mid in ("dec", "jan")}, attachments={
+            ("dec", "a"): b"%PDF-dec", ("jan", "a"): b"%PDF-jan",
+        })
+
+        def parse_month(data, name):
+            return self._result("2026-12" if data == b"%PDF-dec" else "2027-01")
+
+        def run():
+            return sync(self.conn, gmail, datetime.date(2027, 2, 1),
+                        extract_tokens=lambda data: data, parse=parse_month, only_month="2026-12")
+
+        first = run()
+        self.assertEqual(first["message"], "Updated Dec 2026: 1 added, 0 removed, 0 changed.")
+        self.assertEqual(first["changed_months"], ["2026-12"])
+        self.assertEqual([m["work_month"] for m in first["months"]], ["2026-12"])
+        self.assertEqual(len(db.list_days(self.conn, "2026-12")), 1)
+        self.assertEqual(db.list_days(self.conn, "2027-01"), [])
+        self.assertIsNone(db.get_roster_import(self.conn, "2027-01"))
+        query, limit = gmail.recorded_queries[0]
+        self.assertEqual(query, "from:planner@example.com has:attachment filename:pdf after:2026/09/02")
+        self.assertGreaterEqual(limit, 60)
+        self.assertEqual(run()["message"], "Dec 2026 is already up to date.")
+        db.set_roster_import(self.conn, "2026-12", "newer", 5000, "2027-02-01T00:00:00")
+        skipped = run()
+        self.assertEqual(skipped["months"][0]["status"], "skipped")
+        self.assertEqual(skipped["message"], "Dec 2026: a newer roster was already applied.")
+        gmail.messages.pop("dec")
+        absent = run()
+        self.assertEqual(absent["months"], [])
+        self.assertEqual(absent["message"], "No roster for Dec 2026 found in your mail.")
+
+    def test_only_month_limit_preserves_larger_max_mails(self):
+        gmail = FakeGmail()
+        self._sync_fake(gmail, only_month="2026-12", max_mails=80)
+        self.assertEqual(gmail.recorded_queries[0][1], 80)
+
+    def test_only_month_newer_unreadable_mail_blocks_cached_roster(self):
+        gmail = FakeGmail(messages={"old": self._mail("old", 100)},
+                          attachments={("old", "a"): b"%PDF-good"})
+        self._sync_fake(gmail, only_month="2026-12")
+        db.save_month_days(self.conn, "2026-12", [])
+        gmail.messages["new"] = self._mail("new", 200)
+        gmail.attachments[("new", "a")] = b"%PDF-bad"
+
+        def fail(tokens, name):
+            raise RosterError("total mismatch")
+
+        for attempt in range(2):
+            res = sync(self.conn, gmail, datetime.date(2027, 2, 1),
+                       extract_tokens=lambda data: data, parse=fail, only_month="2026-12")
+            detail = "a newer roster mail could not be read, so this month was left unchanged"
+            self.assertEqual(res["months"], [{"work_month": "2026-12", "status": "skipped", "detail": detail}])
+            self.assertEqual(res["message"], "Dec 2026: " + detail + ".")
+            self.assertEqual(res["errors"], ["Roster new: total mismatch"])
+            self.assertEqual(res["changed_months"], [])
+            self.assertEqual(db.list_days(self.conn, "2026-12"), [])
 
 
 if __name__ == "__main__":

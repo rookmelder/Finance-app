@@ -296,7 +296,8 @@
     </div>
     <button type="submit">Save</button>
   </form>
-  <form method="post" action="{{ url_for('roster_sync_now') }}" style="margin-top: 14px;">
+  <div data-rs-panel></div>
+  <form method="post" action="{{ url_for('roster_sync_now') }}" data-roster-sync style="margin-top: 14px;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" {% if not google.gmail_ok or not google.roster.sender or not google.roster.name %}disabled{% endif %}>Sync roster now</button>
   </form>
@@ -319,4 +320,8 @@
 </section>
 {% endif %}
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='rostersync.js') }}"></script>
 {% endblock %}

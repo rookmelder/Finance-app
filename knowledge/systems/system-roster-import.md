@@ -4,7 +4,7 @@
 Back to [Systems](systems.md).
 
 ## What it does
-The boss emails a one-page PDF roster ("Rooster Technische Dienst") for the whole department. Pressing **Sync roster now** (Settings, card "Roster from email") searches Gmail for PDFs from the saved sender, reads each PDF, picks the user's row (setting "Your name in the roster"), keeps the newest mail per work month, and replaces that month's worked days when they differ. Each imported day carries a shift code (V, D, L, ...), the shift's start/end time and the paid minutes. Google Calendar is then synced for the changed months (events read "Work V", at the shift's times). There is no background polling: the button is the only trigger.
+The boss emails a one-page PDF roster ("Rooster Technische Dienst") for the whole department. Pressing **Sync roster now** (Settings, card "Roster from email") searches Gmail for PDFs from the saved sender, reads each PDF, picks the user's row (setting "Your name in the roster"), keeps the newest mail per work month, and replaces that month's worked days when they differ. Each imported day carries a shift code (V, D, L, ...), the shift's start/end time and the paid minutes. Google Calendar is then synced for the changed months (events read "Work V", at the shift's times). There is no background polling: the button is the only trigger. The button starts a background job and the page shows a progress bar (stages: searching, reading mail i of n, updating days, updating Google Calendar). Every month tile on the Months page has its own "Sync roster" button: it looks for the roster of that one month (also for months that are already over) and updates that month and the calendar.
 
 ## Files
 - `src/roster_pdf.py`: `extract_tokens(pdf_bytes)` turns page 1 of a PDF into `(x, y, text)` tokens with pypdf (the only module that imports pypdf); `PdfError`.
@@ -12,7 +12,8 @@ The boss emails a one-page PDF roster ("Rooster Technische Dienst") for the whol
 - `src/gmail.py`: read-only Gmail REST client over `urllib` (`search`, `get_message`, `get_attachment`); `GmailError`.
 - `src/roster_sync.py`: `sync(conn, gmail, today, ...)` orchestration and the report dict.
 - `src/app.py`: routes `/roster/settings` (sender, name) and `/roster/sync`, `_gmail_client`, `_roster_view`; `src/templates/settings.html`: the roster card.
-- `src/db.py`: tables `roster_import` and `roster_state`, columns `google_config.roster_sender` / `roster_name`, `google_sync.scopes`.
+- `src/static/rostersync.js`: progress bar and polling for every `form[data-roster-sync]` (Settings card and Months page tiles); `/roster/sync` (header `X-Requested-With: fetch` starts the job, otherwise it runs inline and redirects) and `/roster/progress` in `src/app.py`; `tests/test_roster_ui.py`.
+- `src/db.py`: tables `roster_import`, `roster_mail` and `roster_state`, columns `google_config.roster_sender` / `roster_name`, `google_sync.scopes`.
 - `tests/test_roster.py`, `tests/test_gmail.py`, `tests/test_roster_sync.py`, `tests/test_roster_routes.py`; fixture `tests/fixtures/roster_tokens.json` (anonymized tokens of a real roster, the user's row is "Test Person").
 
 ## How it connects
@@ -27,6 +28,8 @@ The boss emails a one-page PDF roster ("Rooster Technische Dienst") for the whol
 - Pay uses the cell's hours (7.5 h = 450 min); the shift times (8:30-16:30) include the unpaid half hour break.
 - Per month the newest mail wins; months before the current month are never touched; a month is not overwritten by an older mail than the one applied before; if a newer roster mail could not be read the months older than it are left unchanged.
 - Manual holiday days on dates the roster does not use are kept; every other stored day of the month is replaced by the roster.
+- Cache: per Gmail message id (and sender + name) the outcome is stored in `roster_mail`: not from the sender / no PDF, not a roster, or the parsed rows of the user. The PDF itself is never stored (it holds colleagues' names). A cached mail needs no Gmail download, so a repeat sync only lists mail. Mails that failed to parse or have several PDFs are not cached.
+- Per-month sync: the search uses `after:` (month start minus 90 days), only that month is applied, and the "month already over" rule is off because the user asked for that month.
 - Unknown legend shifts are added to the shifts table (never overwriting an edited one) so they can be picked on the calendar page.
 
 ## Why it is built this way
@@ -36,6 +39,8 @@ The boss emails a one-page PDF roster ("Rooster Technische Dienst") for the whol
 - See [Roster import decision](../decisions/decision-roster-import-button-gmail-pdf.md).
 
 ## Known issues
+- The cache keeps parse results: after changing the parser run `DELETE FROM roster_mail;` once so old mails are read again.
+- The progress state lives in memory of one app process (fine for the single Docker container).
 - A real PDF cannot be built in tests; `roster_pdf.extract_tokens` was only checked by hand against a real roster.
 - If the roster layout changes (different grid or legend), the parse is rejected and the report shows the error; nothing is changed.
 - Gmail reading needs the app to be published in Google Cloud (unverified is fine for one user) and the Gmail API enabled.

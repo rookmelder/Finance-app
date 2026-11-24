@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import sys
+import threading
 from flask import (
     Flask,
     abort,
@@ -364,9 +365,78 @@ def _render_income(conn, error=None, status_code=200):
             default_wm=default_wm,
             default_pm=calc.pay_month(default_wm),
             error=error,
+            roster_ready=_roster_ready(conn),
         ),
         status_code,
     )
+
+
+def _roster_ready(conn) -> bool:
+    """True when the roster sync can run: Google connected, Gmail granted, sender and name set."""
+    row = db.get_google(conn)
+    if row is None or _gcal_creds(conn) is None:
+        return False
+    if gcal.SCOPE_GMAIL not in (row.get("scopes") or "").split():
+        return False
+    cfg = db.get_google_config(conn)
+    return bool(cfg["roster_sender"].strip() and cfg["roster_name"].strip())
+
+
+def _do_roster_sync(conn, only_month=None, progress=None):
+    """Run one roster sync plus the Google Calendar update. Returns the report dict (never raises)."""
+    empty = {"months": [], "ignored": 0, "errors": [], "changed_months": []}
+    row = db.get_google(conn)
+    if row is None or _gcal_creds(conn) is None:
+        return {**empty, "ok": False, "message": "Connect Google first (Google Calendar card)."}
+    if gcal.SCOPE_GMAIL not in (row.get("scopes") or "").split():
+        return {**empty, "ok": False,
+                "message": "Gmail access was not granted yet. Use the \"Allow Gmail access\" button in the Roster card and tick the Gmail box."}
+
+    def sync_progress(percent, text):
+        if progress:  # the mail part fills 0-90 %, the calendar update the rest
+            progress(min(90, percent * 9 // 10), text)
+
+    try:
+        kwargs = {"progress": sync_progress}
+        if only_month:
+            kwargs["only_month"] = only_month
+        report = roster_sync.sync(conn, _gmail_client(conn, row), datetime.date.today(), **kwargs)
+    except gcal.GcalError as err:
+        return {**empty, "ok": False, "message": str(err)}
+    except Exception as err:  # never show a stack trace for a mail problem
+        current_app.logger.warning("Roster sync failed: %s", type(err).__name__)
+        return {**empty, "ok": False,
+                "message": "Unexpected error while reading your mail (" + type(err).__name__ + ")."}
+    if report.get("changed_months"):
+        if progress:
+            progress(93, "Updating Google Calendar...")
+        report["gcal"] = _gcal_sync(conn, report["changed_months"])
+    return report
+
+
+_roster_job = {"lock": threading.Lock(), "running": False, "percent": 0, "text": "", "done": False,
+               "ok": None, "message": "", "gcal": None, "work_month": None}
+
+
+def _job_update(**fields):
+    with _roster_job["lock"]:
+        _roster_job.update(fields)
+
+
+def _roster_worker(app, only_month):
+    """Background thread: own DB connection and app context; stores the report like the plain form does."""
+    with app.app_context():
+        conn = db.connect(app.config["DB_PATH"])
+        try:
+            report = _do_roster_sync(conn, only_month, progress=lambda p, t: _job_update(percent=p, text=t))
+            db.set_roster_state(conn, datetime.datetime.now().isoformat(timespec="seconds"), json.dumps(report))
+        except Exception as err:  # last resort: the job must always end
+            app.logger.warning("Roster job failed: %s", type(err).__name__)
+            report = {"ok": False, "message": "Unexpected error (" + type(err).__name__ + ").", "gcal": None}
+        finally:
+            conn.close()
+    _job_update(running=False, done=True, percent=100, text="Done", ok=bool(report.get("ok")),
+                message=str(report.get("message", "")), gcal=report.get("gcal"))
 
 
 def _render_costs(conn, error=None, status_code=200):
@@ -1030,25 +1100,37 @@ def create_app(cfg: dict) -> Flask:
     @app.route("/roster/sync", methods=["POST"])
     def roster_sync_now():
         conn = get_db()
-        row = db.get_google(conn)
-        empty = {"months": [], "ignored": 0, "errors": [], "changed_months": []}
-        if row is None or _gcal_creds(conn) is None:
-            report = {**empty, "ok": False, "message": "Connect Google first (Google Calendar card)."}
-        elif gcal.SCOPE_GMAIL not in (row.get("scopes") or "").split():
-            report = {**empty, "ok": False,
-                      "message": "Gmail access was not granted yet. Use the \"Allow Gmail access\" button in the Roster card and tick the Gmail box."}
+        only_month = request.form.get("work_month", "").strip() or None
+        wants_json = request.headers.get("X-Requested-With") == "fetch"
+        if only_month and not _valid_work_month(only_month):
+            if wants_json:
+                return jsonify(ok=False, message="Invalid month."), 400
+            return redirect(url_for("settings") + "#roster", code=303)
+        if not wants_json:  # no JavaScript: run it here and show the report on Settings
+            report = _do_roster_sync(conn, only_month)
+            db.set_roster_state(conn, datetime.datetime.now().isoformat(timespec="seconds"), json.dumps(report))
+            return redirect(url_for("settings") + "#roster", code=303)
+        if not _roster_ready(conn):
+            return jsonify(ok=False, message="Connect Google, allow Gmail and fill in the sender and your name first."), 400
+        with _roster_job["lock"]:
+            if _roster_job["running"]:
+                return jsonify(ok=False, message="A sync is already running."), 409
+            _roster_job.update(running=True, percent=0, text="Starting...", done=False, ok=None, message="",
+                               gcal=None, work_month=only_month)
+        app_obj = current_app._get_current_object()
+        if app_obj.config["DB_PATH"] == ":memory:":  # a second connection would see another database
+            _roster_worker(app_obj, only_month)
         else:
-            try:
-                report = roster_sync.sync(conn, _gmail_client(conn, row), datetime.date.today())
-            except gcal.GcalError as err:
-                report = {**empty, "ok": False, "message": str(err)}
-            except Exception as err:  # never show a stack trace for a mail problem
-                current_app.logger.warning("Roster sync failed: %s", type(err).__name__)
-                report = {**empty, "ok": False, "message": "Unexpected error while reading your mail (" + type(err).__name__ + ")."}
-            if report.get("changed_months"):
-                report["gcal"] = _gcal_sync(conn, report["changed_months"])
-        db.set_roster_state(conn, datetime.datetime.now().isoformat(timespec="seconds"), json.dumps(report))
-        return redirect(url_for("settings") + "#roster", code=303)
+            threading.Thread(target=_roster_worker, args=(app_obj, only_month), daemon=True).start()
+        return jsonify(ok=True, started=True)
+
+    @app.route("/roster/progress")
+    def roster_progress():
+        with _roster_job["lock"]:
+            state = {k: v for k, v in _roster_job.items() if k != "lock"}
+        resp = jsonify(state)
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     @app.route("/google/options", methods=["POST"])
     def google_options():

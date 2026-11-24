@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 import unittest.mock
 import urllib.parse
@@ -606,8 +607,8 @@ class TestRosterEndToEnd(RosterRoutesBase):
 
         with unittest.mock.patch(
             "src.app.roster_sync.sync",
-            side_effect=lambda conn, gm, today: real_sync(
-                conn, gm, datetime.date(2026, 11, 24), extract_tokens=lambda data: tokens
+            side_effect=lambda conn, gm, today, **kw: real_sync(
+                conn, gm, datetime.date(2026, 11, 24), extract_tokens=lambda data: tokens, **kw
             )
         ):
             # First sync run
@@ -680,6 +681,100 @@ class TestReconsentKeepsCalendar(RosterRoutesBase):
         created = [call for call in self.fake_gcal.calls
                    if call[0] == "POST" and call[1].endswith("/calendars")]
         self.assertEqual(created, [])
+
+
+class TestRosterProgressJob(RosterRoutesBase):
+    """The fetch flavour of /roster/sync (background job + /roster/progress) and the per-month option."""
+
+    HEADERS = {"X-Requested-With": "fetch"}
+
+    def prepare(self):
+        c = self.make_app(google=True)
+        self.connect(c, gmail_scope=True)
+        c.post("/roster/settings", data={"sender": "planner@example.com", "name": "Test Person",
+                                         "csrf_token": self.csrf(c)})
+        return c
+
+    def test_progress_requires_login(self):
+        anon = self.make_app(logged_in=False)
+        r = anon.get("/roster/progress")
+        self.assertEqual(r.status_code, 302)
+
+    def test_progress_idle_state(self):
+        c = self.make_app(google=True)
+        state = c.get("/roster/progress").get_json()
+        self.assertEqual(set(state), {"running", "percent", "text", "done", "ok", "message", "gcal", "work_month"})
+        self.assertIn(state["running"], (False,))
+
+    def test_fetch_sync_not_ready_is_400_json(self):
+        c = self.make_app(google=True)
+        r = c.post("/roster/sync", data={"csrf_token": self.csrf(c)}, headers=self.HEADERS)
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(r.get_json()["ok"])
+
+    def test_fetch_sync_runs_and_reports_progress(self):
+        c = self.prepare()
+        real_sync = roster_sync.sync
+        seen = {}
+
+        def fake_sync(conn, gm, today, **kw):
+            seen["only_month"] = kw.get("only_month")
+            kw["progress"](50, "Reading mail 1 of 1...")
+            return {"ok": True, "message": "No roster found in your mail.", "months": [], "ignored": 0,
+                    "errors": [], "changed_months": []}
+
+        with unittest.mock.patch("src.app.roster_sync.sync", side_effect=fake_sync):
+            r = c.post("/roster/sync", data={"csrf_token": self.csrf(c), "work_month": "2026-12"},
+                       headers=self.HEADERS)
+            self.assertEqual(r.get_json(), {"ok": True, "started": True})
+            state = c.get("/roster/progress").get_json()   # a real file db: the job runs in a thread, wait for it
+            for _ in range(100):
+                if state["done"]:
+                    break
+                time.sleep(0.05)
+                state = c.get("/roster/progress").get_json()
+        self.assertTrue(state["done"])
+        self.assertFalse(state["running"])
+        self.assertTrue(state["ok"])
+        self.assertEqual(state["percent"], 100)
+        self.assertEqual(state["work_month"], "2026-12")
+        self.assertEqual(seen["only_month"], "2026-12")
+        self.assertIn("No roster", state["message"])
+        report = json.loads(db.get_roster_state(db.connect(self.db_path))["report"])
+        self.assertTrue(report["ok"])
+
+    def test_invalid_month_rejected(self):
+        c = self.prepare()
+        r = c.post("/roster/sync", data={"csrf_token": self.csrf(c), "work_month": "2026-13"}, headers=self.HEADERS)
+        self.assertEqual(r.status_code, 400)
+
+    def test_second_start_while_running_is_409(self):
+        from src import app as app_module
+        c = self.prepare()
+        with app_module._roster_job["lock"]:
+            app_module._roster_job["running"] = True
+        try:
+            r = c.post("/roster/sync", data={"csrf_token": self.csrf(c)}, headers=self.HEADERS)
+            self.assertEqual(r.status_code, 409)
+        finally:
+            with app_module._roster_job["lock"]:
+                app_module._roster_job["running"] = False
+
+    def test_plain_form_with_month_still_redirects(self):
+        c = self.prepare()
+        with unittest.mock.patch("src.app.roster_sync.sync", return_value={
+                "ok": True, "message": "x", "months": [], "ignored": 0, "errors": [], "changed_months": []}) as m:
+            r = c.post("/roster/sync", data={"csrf_token": self.csrf(c), "work_month": "2026-12"})
+        self.assertEqual(r.status_code, 303)
+        self.assertEqual(m.call_args.kwargs.get("only_month"), "2026-12")
+
+    def test_months_page_shows_sync_buttons_only_when_ready(self):
+        c = self.make_app(google=True)
+        self.assertNotIn("data-roster-sync", c.get("/income").get_data(as_text=True))
+        c = self.prepare()
+        html = c.get("/income").get_data(as_text=True)
+        self.assertIn("data-roster-sync", html)
+        self.assertIn('name="work_month"', html)
 
 
 if __name__ == "__main__":

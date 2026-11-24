@@ -1,6 +1,7 @@
 """SQLite database storage and queries for finance app."""
 
 from datetime import date
+import json
 import sqlite3
 from typing import Any, Optional
 
@@ -101,6 +102,16 @@ def connect(path: str) -> sqlite3.Connection:
                 message_id TEXT NOT NULL,
                 internal_date INTEGER NOT NULL,
                 applied_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS roster_mail (
+                message_id TEXT PRIMARY KEY,
+                sender TEXT NOT NULL,
+                name TEXT NOT NULL,
+                internal_date INTEGER NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('skip', 'ignored', 'roster')),
+                result TEXT NOT NULL DEFAULT ''
             )
         """)
         conn.execute("""
@@ -604,6 +615,38 @@ def set_roster_import(conn: sqlite3.Connection, work_month: str, message_id: str
             " ON CONFLICT(work_month) DO UPDATE SET message_id = excluded.message_id,"
             " internal_date = excluded.internal_date, applied_at = excluded.applied_at",
             (work_month, str(message_id), int(internal_date), str(applied_at)))
+
+
+def get_roster_mail(conn: sqlite3.Connection, message_id: str, sender: str, name: str) -> Optional[dict[str, Any]]:
+    """Cached outcome for a mail that was already looked at with this sender and name, else None.
+
+    {"message_id","internal_date","kind": "skip"|"ignored"|"roster","result": parsed roster dict or None}.
+    Only the parsed rows of the user are cached, never the PDF.
+    """
+    row = conn.execute("SELECT * FROM roster_mail WHERE message_id = ? AND sender = ? AND name = ?",
+                       (str(message_id), sender, name)).fetchone()
+    if row is None:
+        return None
+    try:
+        result = json.loads(row["result"]) if row["result"] else None
+    except ValueError:
+        return None
+    return {"message_id": row["message_id"], "internal_date": row["internal_date"], "kind": row["kind"],
+            "result": result}
+
+
+def save_roster_mail(conn: sqlite3.Connection, message_id: str, sender: str, name: str, internal_date: int,
+                     kind: str, result: Optional[dict] = None) -> None:
+    if kind not in ("skip", "ignored", "roster"):
+        raise ValueError("kind must be skip, ignored or roster")
+    if (kind == "roster") != (result is not None):
+        raise ValueError("a result is needed for kind roster, and only then")
+    with conn:
+        conn.execute(
+            "INSERT INTO roster_mail (message_id, sender, name, internal_date, kind, result) VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(message_id) DO UPDATE SET sender = excluded.sender, name = excluded.name,"
+            " internal_date = excluded.internal_date, kind = excluded.kind, result = excluded.result",
+            (str(message_id), sender, name, int(internal_date), kind, json.dumps(result) if result is not None else ""))
 
 
 def get_roster_state(conn: sqlite3.Connection) -> dict[str, Any]:

@@ -194,3 +194,15 @@ start with %PDF); a PDF that is not a roster (NotARoster) is ignored; per work m
 never apply a month whose work month is before the current month; a month is applied only when the parsed days differ from the
 stored days (date, minutes, code, start, end); never go back to an older mail than the one applied before (table roster_import);
 the month and year always come from the PDF title, never from the email date.
+
+
+# Addendum 2026-11-24 (2): sync progress, per-month sync, mail cache
+- sync(...) gets only_month=None and progress=None. progress(percent:int 0..100, text:str) is called: (2, "Searching your mail..."), then per mail i of n
+  (10 + 70*(i-1)//n, "Reading mail i of n..."), (85, "Updating your days..."), and (100, "Done"). Percent never goes down.
+- Cache table roster_mail (db.get_roster_mail / save_roster_mail): the outcome per Gmail message id for a given sender+name: kind skip (not from the sender / no PDF),
+  ignored (PDF without roster title), roster (parsed result of the user's row, JSON). The PDF itself is NEVER stored (colleagues' names). Errors are never cached.
+  A cached mail needs no get_message / get_attachment call. Only mails with 0 or exactly 1 PDF candidate are cached.
+- only_month="YYYY-MM": query uses `after:YYYY/MM/DD` (first day of that month minus 90 days) instead of newer_than, max_mails at least 60; only that month is considered
+  (others are ignored, not reported); the "month already over" rule does NOT apply (explicit request); all other rules do.
+- Background job in app.py: POST /roster/sync with header X-Requested-With: fetch starts a thread and answers JSON at once; GET /roster/progress returns
+  {"running","percent","text","done","ok","message","gcal","work_month"}; without the header the POST still runs synchronously and redirects (no-JS fallback).

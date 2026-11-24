@@ -16,29 +16,38 @@
 <h2 class="year-heading">{{ year }}</h2>
 <div class="year-grid">
   {% for m in year_months %}
-  <a class="mini-month{% if m.is_default %} is-next{% endif %}" href="{{ url_for('calendar_page', work_month=m.work_month) }}"{% if m.is_default %} id="current"{% endif %} aria-label="{{ m.label }}">
-    <span class="mini-head">
-      <span class="mini-name">{{ m.label.split(' ')[0] }}</span>
-      {% if m.is_default %}<span class="badge badge-active">Next up</span>{% endif %}
-      {% if m.has_income and not m.per_day %}<span class="badge badge-inactive">Totals</span>{% endif %}
-    </span>
-    <span class="mini-grid" aria-hidden="true">
-      {% for wd in ['M', 'T', 'W', 'T', 'F', 'S', 'S'] %}<span class="mini-wd">{{ wd }}</span>{% endfor %}
-      {% for week in m.weeks %}{% for c in week %}
-        {% if c %}<span class="mini-day{% if c.worked %} is-worked{% endif %}{% if c.paid_holiday %} is-paid-holiday{% endif %}{% if c.public_holiday %} is-public{% endif %}{% if c.today %} is-today{% endif %}{% if c.sunday %} is-sunday{% endif %}"{% if c.public_holiday %} title="{{ c.public_holiday }}"{% endif %}>{{ c.day }}</span>{% else %}<span class="mini-day is-blank"></span>{% endif %}
-      {% endfor %}{% endfor %}
-    </span>
-    <span class="mini-foot">
-      <span class="mini-paid">Paid in <time datetime="{{ m.pay_month }}">{{ m.pay_month | month_label }}</time></span>
-      {% if m.has_income %}
-      <span class="mini-amount">
-        {% if m.actual is not none %}{{ m.actual | money }} <small>actual</small>{% else %}{{ m.estimate | money }} <small>{{ m.days }} {% if m.days == 1 %}day{% else %}days{% endif %}</small>{% endif %}
+  <div class="mini-wrap">
+    <a class="mini-month{% if m.is_default %} is-next{% endif %}" href="{{ url_for('calendar_page', work_month=m.work_month) }}"{% if m.is_default %} id="current"{% endif %} aria-label="{{ m.label }}">
+      <span class="mini-head">
+        <span class="mini-name">{{ m.label.split(' ')[0] }}</span>
+        {% if m.is_default %}<span class="badge badge-active">Next up</span>{% endif %}
+        {% if m.has_income and not m.per_day %}<span class="badge badge-inactive">Totals</span>{% endif %}
       </span>
-      {% else %}
-      <span class="mini-empty">No days yet</span>
-      {% endif %}
-    </span>
-  </a>
+      <span class="mini-grid" aria-hidden="true">
+        {% for wd in ['M', 'T', 'W', 'T', 'F', 'S', 'S'] %}<span class="mini-wd">{{ wd }}</span>{% endfor %}
+        {% for week in m.weeks %}{% for c in week %}
+          {% if c %}<span class="mini-day{% if c.worked %} is-worked{% endif %}{% if c.paid_holiday %} is-paid-holiday{% endif %}{% if c.public_holiday %} is-public{% endif %}{% if c.today %} is-today{% endif %}{% if c.sunday %} is-sunday{% endif %}"{% if c.public_holiday %} title="{{ c.public_holiday }}"{% endif %}>{{ c.day }}</span>{% else %}<span class="mini-day is-blank"></span>{% endif %}
+        {% endfor %}{% endfor %}
+      </span>
+      <span class="mini-foot">
+        <span class="mini-paid">Paid in <time datetime="{{ m.pay_month }}">{{ m.pay_month | month_label }}</time></span>
+        {% if m.has_income %}
+        <span class="mini-amount">
+          {% if m.actual is not none %}{{ m.actual | money }} <small>actual</small>{% else %}{{ m.estimate | money }} <small>{{ m.days }} {% if m.days == 1 %}day{% else %}days{% endif %}</small>{% endif %}
+        </span>
+        {% else %}
+        <span class="mini-empty">No days yet</span>
+        {% endif %}
+      </span>
+    </a>
+    {% if roster_ready %}
+    <form method="post" action="{{ url_for('roster_sync_now') }}" data-roster-sync class="mini-sync">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="work_month" value="{{ m.work_month }}">
+      <button type="submit" class="btn-secondary btn-sm" title="Look for the roster of {{ m.label }} in your mail and update this month">Sync roster</button>
+    </form>
+    {% endif %}
+  </div>
   {% endfor %}
 </div>
 {% endfor %}
@@ -83,4 +92,8 @@
     <button type="submit">Add by totals</button>
   </form>
 </details>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='rostersync.js') }}"></script>
 {% endblock %}

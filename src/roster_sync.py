@@ -31,12 +31,16 @@ def sync(
     parse=roster.parse_roster,
     query_days: int = 120,
     max_mails: int = 30,
+    only_month=None,
+    progress=None,
 ) -> dict:
     """Sync roster emails into work days and shifts."""
     cfg = db.get_google_config(conn)
     sender = (cfg.get("roster_sender") or "").strip()
     name = (cfg.get("roster_name") or "").strip()
     if not sender or not name:
+        if progress is not None:
+            progress(100, "Done")
         return {
             "ok": False,
             "message": "Fill in the sender's email address and your name first.",
@@ -53,12 +57,43 @@ def sync(
 
     try:
         query = f"from:{sender} has:attachment filename:pdf newer_than:{query_days}d"
-        ids = gmail.search(query, limit=max_mails)
+        limit = max_mails
+        if only_month is not None:
+            first_day = datetime.date.fromisoformat(only_month + "-01")
+            after = first_day - datetime.timedelta(days=90)
+            query = f"from:{sender} has:attachment filename:pdf after:{after:%Y/%m/%d}"
+            limit = max(max_mails, 60)
+        if progress is not None:
+            progress(2, "Searching your mail...")
+        ids = gmail.search(query, limit=limit)
 
-        for mid in ids:
+        for i, mid in enumerate(ids, 1):
+            if progress is not None:
+                progress(10 + 70 * (i - 1) // len(ids), f"Reading mail {i} of {len(ids)}...")
+            cached = db.get_roster_mail(conn, mid, sender, name)
+            if cached is not None:
+                if cached["kind"] == "skip":
+                    continue
+                if cached["kind"] == "ignored":
+                    ignored += 1
+                    continue
+                result = cached["result"]
+                month = result["month"]
+                candidate = {
+                    "month": month,
+                    "message_id": mid,
+                    "internal_date": cached["internal_date"],
+                    "result": result,
+                }
+                if month not in candidates or candidate["internal_date"] >= candidates[month]["internal_date"]:
+                    candidates[month] = candidate
+                continue
+
             msg = gmail.get_message(mid)
+            internal_date = int(msg.get("internal_date", 0))
             from_addr = email.utils.parseaddr(msg.get("from", ""))[1]
             if from_addr.lower() != sender.lower():
+                db.save_roster_mail(conn, mid, sender, name, internal_date, "skip")
                 continue
 
             attachments = msg.get("attachments", [])
@@ -66,16 +101,18 @@ def sync(
                 att for att in attachments
                 if att.get("filename", "").lower().endswith(".pdf") or att.get("mime_type") == "application/pdf"
             ]
-            if not pdf_candidates:
-                continue
-
             label = msg.get("subject") or msg.get("id") or str(mid)
-
+            pdf_data = []
             for att in pdf_candidates:
                 data = gmail.get_attachment(msg["id"], att["attachment_id"])
-                if not data.startswith(b"%PDF"):
-                    continue
+                if data.startswith(b"%PDF"):
+                    pdf_data.append(data)
 
+            if not pdf_data:
+                db.save_roster_mail(conn, mid, sender, name, internal_date, "skip")
+                continue
+
+            for data in pdf_data:
                 try:
                     tokens = extract_tokens(data)
                 except PdfError as err:
@@ -87,12 +124,16 @@ def sync(
                     result = parse(tokens, name)
                 except NotARoster:
                     ignored += 1
+                    if len(pdf_data) == 1:
+                        db.save_roster_mail(conn, mid, sender, name, internal_date, "ignored")
                     continue
                 except RosterError as err:
                     errors.append(f"{label}: {err}")
                     error_dates.append(int(msg.get("internal_date", 0)))
                     continue
 
+                if len(pdf_data) == 1:
+                    db.save_roster_mail(conn, mid, sender, name, internal_date, "roster", result=result)
                 candidate = {
                     "month": result["month"],
                     "message_id": msg["id"],
@@ -104,6 +145,8 @@ def sync(
                     candidates[m] = candidate
 
     except GmailError as err:
+        if progress is not None:
+            progress(100, "Done")
         return {
             "ok": False,
             "message": str(err),
@@ -113,17 +156,21 @@ def sync(
             "changed_months": [],
         }
 
+    if progress is not None:
+        progress(85, "Updating your days...")
     current = today.strftime("%Y-%m")
     months = []
     changed_months = []
 
     for month in sorted(candidates.keys()):
+        if only_month is not None and month != only_month:
+            continue
         candidate = candidates[month]
         result = candidate["result"]
         message_id = candidate["message_id"]
         internal_date = candidate["internal_date"]
 
-        if month < current:
+        if only_month is None and month < current:
             months.append({
                 "work_month": month,
                 "status": "skipped",
@@ -227,11 +274,21 @@ def sync(
     updated_list = [m for m in months if m["status"] == "updated"]
     if updated_list:
         message = " ".join(f"Updated {_format_month(m['work_month'])}: {m['detail']}." for m in updated_list)
+    elif only_month is not None:
+        if months:
+            if months[0]["status"] == "skipped":
+                message = f"{_format_month(only_month)}: {months[0]['detail']}."
+            else:
+                message = f"{_format_month(only_month)} is already up to date."
+        else:
+            message = f"No roster for {_format_month(only_month)} found in your mail."
     elif months:
         message = "Everything is up to date."
     else:
         message = "No roster found in your mail."
 
+    if progress is not None:
+        progress(100, "Done")
     return {
         "ok": True,
         "message": message,
