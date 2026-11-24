@@ -189,7 +189,7 @@ token_provider(force=False) -> access token string (the app passes a gcal.Client
 - 401 -> retry once with token_provider(force=True); 403 with insufficient scope text -> GmailError("Gmail access was not granted...").
 
 ## roster_sync.py (later wave): orchestration + report; app: Settings card with sender/name fields and "Sync roster" button.
-Rules decided with the user: only emails whose sender matches the setting; only real PDF attachments (name ends .pdf AND bytes
+Rules decided with the user: only emails whose sender matches the setting; only real PDF attachments (name ends .pdf or MIME type is application/pdf, AND bytes
 start with %PDF); a PDF that is not a roster (NotARoster) is ignored; per work month the NEWEST email (internal_date) wins;
 never apply a month whose work month is before the current month; a month is applied only when the parsed days differ from the
 stored days (date, minutes, code, start, end); never go back to an older mail than the one applied before (table roster_import);

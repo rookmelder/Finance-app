@@ -659,5 +659,28 @@ class TestRosterEndToEnd(RosterRoutesBase):
             self.assertIn("December 2026: unchanged (already up to date)", html2)
 
 
+class TestReconsentKeepsCalendar(RosterRoutesBase):
+    """Granting Gmail access later must reuse the existing "Work" calendar, not create a second one."""
+
+    def test_allow_gmail_button_reconnects_in_place(self):
+        c = self.make_app(google=True)
+        self.connect(c, gmail_scope=False)
+        conn = db.connect(self.db_path)
+        db.update_google(conn, calendar_id="cal-1")
+        html = c.get("/settings").get_data(as_text=True)
+        self.assertIn("Allow Gmail access", html)
+        self.assertNotIn("Disconnect Google, connect again", html)
+        self.fake_gcal.calls.clear()
+
+        self.connect(c, gmail_scope=True)  # same POST /google/connect + callback the button triggers
+
+        row = db.get_google(db.connect(self.db_path))
+        self.assertEqual(row["calendar_id"], "cal-1")
+        self.assertIn(gcal.SCOPE_GMAIL, row["scopes"].split())
+        created = [call for call in self.fake_gcal.calls
+                   if call[0] == "POST" and call[1].endswith("/calendars")]
+        self.assertEqual(created, [])
+
+
 if __name__ == "__main__":
     unittest.main()

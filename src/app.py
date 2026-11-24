@@ -1036,7 +1036,7 @@ def create_app(cfg: dict) -> Flask:
             report = {**empty, "ok": False, "message": "Connect Google first (Google Calendar card)."}
         elif gcal.SCOPE_GMAIL not in (row.get("scopes") or "").split():
             report = {**empty, "ok": False,
-                      "message": "Gmail access was not granted yet. Disconnect Google, connect again and tick the Gmail box."}
+                      "message": "Gmail access was not granted yet. Use the \"Allow Gmail access\" button in the Roster card and tick the Gmail box."}
         else:
             try:
                 report = roster_sync.sync(conn, _gmail_client(conn, row), datetime.date.today())

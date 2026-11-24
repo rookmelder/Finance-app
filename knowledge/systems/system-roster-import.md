@@ -39,3 +39,4 @@ The boss emails a one-page PDF roster ("Rooster Technische Dienst") for the whol
 - A real PDF cannot be built in tests; `roster_pdf.extract_tokens` was only checked by hand against a real roster.
 - If the roster layout changes (different grid or legend), the parse is rejected and the report shows the error; nothing is changed.
 - Gmail reading needs the app to be published in Google Cloud (unverified is fine for one user) and the Gmail API enabled.
+- An existing calendar-only connection gets Gmail through the "Allow Gmail access" button (a normal reconnect, no disconnect): the stored `calendar_id` is kept, so no second "Work" calendar is made (tested in `tests/test_roster_routes.py`).

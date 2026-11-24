@@ -278,7 +278,11 @@
   </div>
   <p class="help-text">Press the button to read your mail, find the newest roster PDF per month, and update your worked days and shifts (and the Google calendar) if they changed. Only PDFs from the sender below are read, nothing is deleted or sent, and finished months are left alone.</p>
   {% if not google.gmail_ok %}
-  <p class="error">Gmail access was not granted yet. Disconnect Google, connect again and tick the Gmail box.</p>
+  <p class="error">Gmail access was not granted yet. Click the button and tick the Gmail box (your "Work" calendar and its events stay as they are).</p>
+  <form method="post" action="{{ url_for('google_connect') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit">Allow Gmail access</button>
+  </form>
   {% endif %}
   <form method="post" action="{{ url_for('roster_settings') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
