@@ -1,0 +1,15 @@
+.bank-card .bank-payday { margin-top: 1.5rem; }
+.bank-current { font-size: 1.5rem; font-weight: 600; }
+.bank-current small { font-size: .875rem; font-weight: normal; }
+.bank-chart { margin: 1rem 0; }
+.bank-chart .balance-chart { display: block; width: 100%; height: auto; }
+.bank-chart .dot { display: inline; width: auto; height: auto; margin: 0; }
+.bank-table-wrap { overflow-x: auto; }
+.bank-history { width: 100%; border-collapse: collapse; }
+.bank-history th, .bank-history td { padding: .75rem .5rem; text-align: left; border-bottom: 1px solid var(--border); }
+.bank-history td:first-child, .bank-history td:nth-child(3), .bank-history td:nth-child(4) { white-space: nowrap; }
+.bank-history .badge { display: inline-block; font-size: .75rem; }
+.bank-positive { color: #18723c; }
+@media (prefers-color-scheme: dark) {
+  .bank-positive { color: #75d79b; }
+}

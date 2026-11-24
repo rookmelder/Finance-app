@@ -21,7 +21,8 @@ from flask import (
     session,
     url_for,
 )
-from src import auth, calc, config, db, gcal, gmail, roster_sync
+from markupsafe import Markup
+from src import auth, balance, balance_chart, calc, config, db, gcal, gmail, roster_sync
 
 
 def get_db():
@@ -66,6 +67,48 @@ def _estimate(conn, row) -> dict:
         sunday_premium_cents=row["sunday_premium_cents"],
         rsz_bp=row["rsz_bp"],
     )
+
+
+def _bank_income_amount(conn, row):
+    return row["actual_cents"] if row["actual_cents"] is not None else _estimate(conn, row)["total"]
+
+
+def _signed_money(cents):
+    return ("-" if cents < 0 else "+") + calc.format_money(abs(cents))
+
+
+def _bank_state(conn):
+    today = datetime.date.today()
+    iso = today.isoformat()
+    fn = lambda row: _bank_income_amount(conn, row)
+    try:
+        balance.settle(conn, iso, fn)
+    except ValueError:
+        pass  # Another request may have posted the same event.
+    amount = balance.current(conn, iso)
+    if amount is None:
+        return {"set": False}
+    latest = next(e for e in reversed(db.list_balance_events(conn))
+                  if e["kind"] == "set" and e["date"] <= iso)
+    points = [{"date": p["date"], "amount": p["balance_cents"],
+               "delta": p["delta_cents"], "kind": p["kind"], "label": p["label"]}
+              for p in balance.history(conn, iso)]
+    upcoming = balance.upcoming(conn, iso, balance.last_day_of_month(iso[:7]), fn)
+    return {"set": True, "amount": amount, "as_of": latest["date"],
+            "change": amount - latest["amount_cents"], "upcoming": upcoming,
+            "costs_due": sum(-e["amount_cents"] for e in upcoming["events"]
+                             if e["kind"] == "recurring"),
+            "pay_due": sum(e["amount_cents"] for e in upcoming["events"] if e["kind"] == "pay"),
+            "expected_end": amount + upcoming["total_cents"], "points": points,
+            "chart": Markup(balance_chart.chart_svg(points, today))}
+
+
+BANK_MESSAGES = {
+    "saved": ("ok", "Bank balance saved."),
+    "payday_saved": ("ok", "Pay day saved."),
+    "bad_amount": ("error", "Enter a valid balance and a note of at most 80 characters."),
+    "bad_payday": ("error", "Enter a pay day from 1 to 28."),
+}
 
 
 GOOGLE_MESSAGES = {
@@ -505,6 +548,7 @@ def create_app(cfg: dict) -> Flask:
 
     # Jinja filters
     app.jinja_env.filters["money"] = calc.format_money
+    app.jinja_env.filters["signed_money"] = _signed_money
     app.jinja_env.filters["hours"] = calc.format_hours
     app.jinja_env.filters["hhmm"] = _format_hhmm
     app.jinja_env.filters["percent"] = calc.format_percent_bp
@@ -520,6 +564,56 @@ def create_app(cfg: dict) -> Flask:
 
     # Install authentication and CSRF guard
     auth.install(app, cfg["PASSWORD"])
+
+    @app.context_processor
+    def bank_settings_context():
+        if request.endpoint in {"settings", "shifts_save", "shifts_delete",
+                                "google_credentials", "google_options"}:
+            return {"bank_config": db.get_balance_config(get_db()),
+                    "bank_message": BANK_MESSAGES.get(request.args.get("bank", ""))}
+        return {}
+
+    @app.route("/balance", methods=["GET"])
+    def balance_history():
+        conn = get_db()
+        bank = _bank_state(conn)
+        events = balance.history(conn, datetime.date.today().isoformat())
+        return render_template("balance.html", bank=bank, events=list(reversed(events)))
+
+    @app.route("/balance/set", methods=["POST"])
+    def balance_set():
+        text = request.form.get("amount", "").strip()
+        note = request.form.get("note", "").strip()
+        # Strip display decoration, then let the shared parser handle the digits.
+        text = "".join(text.split())
+        if text.startswith("€"):
+            text = text[1:]
+        elif text.startswith("-€"):
+            text = "-" + text[2:]
+        try:
+            if not re.fullmatch(r"-?[0-9]+(?:[.,][0-9]{1,2})?", text) or len(note) > 80:
+                raise ValueError("Invalid bank balance")
+            negative = text.startswith("-")
+            amount = calc.parse_money(text[1:] if negative else text)
+            if negative:
+                amount = -amount
+        except ValueError:
+            return redirect(url_for("settings", bank="bad_amount") + "#bank", code=303)
+        conn = get_db()
+        balance.set_balance(conn, amount, datetime.date.today().isoformat(),
+                            lambda row: _bank_income_amount(conn, row), note=note)
+        return redirect(url_for("settings", bank="saved") + "#bank", code=303)
+
+    @app.route("/balance/payday", methods=["POST"])
+    def balance_payday():
+        try:
+            pay_day = int(request.form.get("pay_day", ""))
+            if not 1 <= pay_day <= 28:
+                raise ValueError("Invalid pay day")
+        except ValueError:
+            return redirect(url_for("settings", bank="bad_payday") + "#bank", code=303)
+        db.update_balance_config(get_db(), pay_day)
+        return redirect(url_for("settings", bank="payday_saved") + "#bank", code=303)
 
     # 1. Overview
     @app.route("/", methods=["GET"])
@@ -619,6 +713,7 @@ def create_app(cfg: dict) -> Flask:
 
         return render_template(
             "overview.html",
+            bank=_bank_state(conn),
             month=month_str,
             prev_month=prev_month,
             next_month=next_month,
@@ -949,7 +1044,8 @@ def create_app(cfg: dict) -> Flask:
                                        google=_google_view(conn), shifts=db.list_shifts(conn)), 400
 
         current_settings = db.get_settings(conn)
-        return render_template("settings.html", settings=current_settings, google=_google_view(conn), shifts=db.list_shifts(conn))
+        return render_template("settings.html", settings=current_settings, google=_google_view(conn),
+                               shifts=db.list_shifts(conn), bank=_bank_state(conn))
 
     @app.route("/shifts/save", methods=["POST"])
     def shifts_save():

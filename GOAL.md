@@ -26,7 +26,7 @@ When my pay arrives I enter the real amount. From then on the app uses that inst
 
 ## Overview / "what can I spend"
 Per month, clearly shows: income (estimate or real), the 50/20/30 split, subscriptions total, what is left in the 50%, what is left of the 20% free spending, and the 30% for saving/investing.
-Unspent free money (20%) carries over to the next month: a toggle in settings, default ON. Overspending carries over as a negative. Leftover of the 50% is only shown, it does not carry over.
+Unspent free money (20%) can carry over to the next month: a toggle in settings, default OFF since 2026-11-24 (the bank balance below is never reset either way). Overspending carries over as a negative. Leftover of the 50% is only shown, it does not carry over.
 
 ## Expense log
 To know what is left of the 20% (and for carry-over) I can log expenses: date, amount, bucket (needs / free / savings), note. This is also how "tracks my spending" works.

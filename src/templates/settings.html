@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block title %}Settings - Finance{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='balance.css') }}">{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
@@ -78,6 +79,29 @@
 
   <button type="submit">Save settings</button>
 </form>
+
+<section class="card bank-card" id="bank">
+  <h2>Bank account</h2>
+  {% if bank_message %}<p class="{{ 'notice' if bank_message[0] == 'ok' else 'error' }}">{{ bank_message[1] }}</p>{% endif %}
+  <p class="help-text">Type what is on your regular bank account right now. The app then adds your pay on the pay day, subtracts your logged expenses and your subscriptions when they are due, and keeps every change. Costs and pay dated on the day you save the balance are assumed to be in the number you type. A subscription is only subtracted when it has a "Next due" date on the Monthly costs page; do not also log it as an expense.</p>
+  {% if bank is defined and bank.set %}
+  <p class="bank-current {% if bank.amount < 0 %}neg{% endif %}">{{ bank.amount | money }} <small>as of {{ bank.as_of }}</small></p>
+  {% endif %}
+  <form method="post" action="{{ url_for('balance_set') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      <label>Balance in euros<input type="text" name="amount" inputmode="decimal" placeholder="1234.56" required></label>
+      <label>Note (optional)<input type="text" name="note" maxlength="80"></label>
+    </div>
+    <button type="submit">Save balance</button>
+  </form>
+  <form method="post" action="{{ url_for('balance_payday') }}" class="bank-payday">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Pay arrives on day of the month<input type="number" name="pay_day" min="1" max="28" value="{{ bank_config.pay_day }}" required></label>
+    <button type="submit">Save pay day</button>
+  </form>
+  <div class="card-links"><a href="{{ url_for('balance_history') }}">History</a></div>
+</section>
 
 <section class="card" id="shifts">
   <div class="card-head">

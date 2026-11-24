@@ -19,7 +19,7 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(s["needs_pct"], 50)
         self.assertEqual(s["free_pct"], 20)
         self.assertEqual(s["save_pct"], 30)
-        self.assertEqual(s["carry_over"], 1)
+        self.assertEqual(s["carry_over"], 0)
 
     def test_update_settings_valid_and_invalid(self):
         # Valid update

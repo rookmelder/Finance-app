@@ -7,5 +7,6 @@ Back to the [knowledge map](../README.md). One line per decision, newest at the 
 - [Work month is paid the month after](decision-work-month-paid-next-month.md): Days are logged per work month; income and budgets belong to the following pay month.
 - [Calendar days and totals as two modes](decision-calendar-mode-and-totals.md): A month is either entered day by day on the calendar (per_day) or as totals; saving days switches it to calendar mode.
 - [Settings snapshot per income month](decision-settings-snapshot-per-month.md): Each income month keeps a copy of the rates it was made with; changing Settings does not change past months.
+- [Bank balance as an append-only ledger](decision-bank-balance-ledger.md): current balance = last typed amount + later changes; history and chart kept; never reset at month end.
 - [Roster import by button from Gmail PDFs](decision-roster-import-button-gmail-pdf.md): Gmail API read-only, pypdf, per-month newest mail, safety checks, no polling.
 - [Google sync to an app-created calendar with a narrow scope](decision-google-sync-app-created-calendar.md): Worked days go to a "Work" calendar the app creates, with scope calendar.app.created and a month diff instead of stored event ids.

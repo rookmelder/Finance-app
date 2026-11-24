@@ -206,3 +206,28 @@ the month and year always come from the PDF title, never from the email date.
   (others are ignored, not reported); the "month already over" rule does NOT apply (explicit request); all other rules do.
 - Background job in app.py: POST /roster/sync with header X-Requested-With: fetch starts a thread and answers JSON at once; GET /roster/progress returns
   {"running","percent","text","done","ok","message","gcal","work_month"}; without the header the POST still runs synchronously and redirects (no-JS fallback).
+
+
+# Addendum 2026-11-24 (3): bank account balance ledger
+Goal: the user types how much money is on the regular bank account now. The app keeps it up to date by itself and keeps EVERY change (ledger + chart).
+The month-end leftover never resets the balance; the existing settings.carry_over toggle (default now OFF) only decides whether leftover FREE budget is added to next month's "You can spend".
+
+## Ledger (db.py, already implemented): table balance_events(id, date, kind, amount_cents, ref, note, meta, created_at), append-only
+- kind 'set': amount_cents = ABSOLUTE balance typed by the user at that moment; date = that day (ISO); meta = db.max_expense_id(conn) at that moment.
+- kind 'pay' (ref = pay_month "YYYY-MM"), 'pay_adjust' (ref "YYYY-MM:n"), 'recurring' (ref "<recurring id>:<due date>"): signed changes (income +, costs -), unique (kind, ref).
+- balance_config.pay_day (1..28, default 5): income of pay month M arrives on day pay_day of M.
+- db.add_balance_event / list_balance_events (by id) / get_balance_config / update_balance_config / max_expense_id.
+
+## balance.py (pure logic over db; standard library only)
+- Money is integer cents. today = datetime.date (always passed in). income_amount(row) -> int cents is passed in by the caller (the app's estimate/actual logic): amount used for an income row.
+- last_set(events) = the 'set' event with the highest id, or None. NO tracking happens (nothing is created, recurring next_due untouched) while there is no 'set' yet.
+- settle(conn, today, income_amount) -> list of new event ids. Idempotent. In this order:
+  a) recurring: for every ACTIVE recurring cost with next_due not None and next_due <= today: loop while next_due <= today: due = next_due; if due > last_set.date (strictly) add a 'recurring' event (date=due, amount=-amount_cents, ref=f"{id}:{due}", note=name); then next_due = due + every_months months (day clamped to the month's length; keep the original day of month for later months within this loop) via db.update_recurring(conn, id, next_due=...). Due dates <= last_set.date still advance next_due but create no event.
+  b) pay: for every income row (db.list_income) whose pay date = pay_month + pay_day (clamped 1..28 already) is <= today and > last_set.date (strictly) and has no 'pay' event with ref = pay_month: add 'pay' event (date = pay date, amount = income_amount(row), note f"Pay {pay_month}") when the amount > 0.
+  c) pay_adjust: for every income row with actual_cents not None that already has a 'pay' event: diff = actual_cents - sum(amount of that month's 'pay' and 'pay_adjust' events); if diff != 0 add 'pay_adjust' (date=today, amount=diff, ref=f"{pay_month}:{n}" with n = 1 + number of existing adjusts of that month, note f"Real pay {pay_month}").
+- set_balance(conn, amount_cents, today, income_amount, note="") -> event id: validates integer (negative allowed: overdrawn), runs settle first, then adds the 'set' event (date today, meta = db.max_expense_id(conn), note).
+- counted_deltas(conn, S, today, upto=None): the changes after a 'set' event S: expenses (every bucket, all leave the account) with date <= today and (date > S.date or (date == S.date and id > S.meta)): amount -amount_cents; ledger events (pay, pay_adjust, recurring) with id > S.id and date <= today. When upto (the next 'set' event) is given, a change that is already counted for upto belongs to upto's segment and is NOT part of S's segment.
+- current(conn, today) -> None (no set) or {"amount": int, "as_of": S.date, "set_amount": S.amount, "change": amount - S.amount, "last_set_id"}.
+- history(conn, today) -> list of points oldest first: {"date","amount" (running balance after this change),"delta","kind": "set"|"pay"|"pay_adjust"|"recurring"|"expense","label"}. Built segment by segment: each 'set' starts a segment with delta = typed - previous running balance (first set: delta = typed), then that segment's changes sorted by (date, kind order pay < pay_adjust < recurring < expense, id). label: note / expense note (fallback bucket name) / "Balance set". Empty list without a set.
+- upcoming(conn, today, until) -> {"items": [{"name","date","amount_cents"}], "total": cents}: active recurring costs with today < next_due <= until (until = datetime.date, normally the last day of this month), sorted by date; amounts positive.
+- last_day_of_month(date) helper.

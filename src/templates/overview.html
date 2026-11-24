@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "_icons.html" import icon %}
 {% block title %}Overview ({{ month }}) - Finance{% endblock %}
+{% block head %}<link rel="stylesheet" href="{{ url_for('static', filename='balance.css') }}">{% endblock %}
 {% block content %}
 <div class="month-navigation">
   <a href="{{ url_for('overview', month=prev_month) }}" class="nav-arrow" aria-label="Previous month ({{ prev_month }})">{{ icon('prev') }}</a>
@@ -12,6 +13,21 @@
 </div>
 
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<section class="card bank-card">
+  <h2>Bank account</h2>
+  {% if bank.set %}
+  <div class="big-number {% if bank.amount < 0 %}neg{% endif %}">{{ bank.amount | money }}</div>
+  <p class="help-text">as of {{ bank.as_of }}, {{ bank.change | signed_money }} since then</p>
+  {% if bank.costs_due > 0 %}<p>Still to pay this month: {{ bank.costs_due | money }}</p>{% endif %}
+  {% if bank.pay_due > 0 %}<p>Pay expected this month: {{ bank.pay_due | money }}</p>{% endif %}
+  {% if bank.upcoming.events %}<p>Expected at the end of the month: {{ bank.expected_end | money }}</p>{% endif %}
+  {% if bank.points | length >= 2 %}<div class="bank-chart">{{ bank.chart }}</div>{% endif %}
+  <div class="card-links"><a href="{{ url_for('balance_history') }}">History</a></div>
+  {% else %}
+  <p>Bank account - not set yet. Enter your balance in <a href="{{ url_for('settings') }}#bank">Settings</a>.</p>
+  {% endif %}
+</section>
 
 {% set pool = free_available + free_spent %}
 <section class="card spend-card">

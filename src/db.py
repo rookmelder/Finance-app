@@ -1,5 +1,6 @@
 """SQLite database storage and queries for finance app."""
 
+import datetime
 from datetime import date
 import json
 import sqlite3
@@ -105,6 +106,26 @@ def connect(path: str) -> sqlite3.Connection:
             )
         """)
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS balance_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('set', 'pay', 'pay_adjust', 'recurring')),
+                amount_cents INTEGER NOT NULL,
+                ref TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                meta INTEGER NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS balance_events_ref ON balance_events (kind, ref) WHERE ref != ''")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS balance_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                pay_day INTEGER NOT NULL DEFAULT 5 CHECK (pay_day BETWEEN 1 AND 28)
+            )
+        """)
+        conn.execute("INSERT OR IGNORE INTO balance_config (id) VALUES (1)")
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS roster_mail (
                 message_id TEXT PRIMARY KEY,
                 sender TEXT NOT NULL,
@@ -200,7 +221,7 @@ def connect(path: str) -> sqlite3.Connection:
             INSERT OR IGNORE INTO settings (
                 id, rate_cents, allowance_cents, minutes_per_day,
                 other_cents, needs_pct, free_pct, save_pct, carry_over
-            ) VALUES (1, 0, 0, 450, 0, 50, 20, 30, 1)
+            ) VALUES (1, 0, 0, 450, 0, 50, 20, 30, 0)
         """)
         conn.execute("""
             INSERT OR IGNORE INTO google_config (id) VALUES (1)
@@ -615,6 +636,54 @@ def set_roster_import(conn: sqlite3.Connection, work_month: str, message_id: str
             " ON CONFLICT(work_month) DO UPDATE SET message_id = excluded.message_id,"
             " internal_date = excluded.internal_date, applied_at = excluded.applied_at",
             (work_month, str(message_id), int(internal_date), str(applied_at)))
+
+
+def add_balance_event(conn: sqlite3.Connection, date: str, kind: str, amount_cents: int, ref: str = "",
+                      note: str = "", meta: Optional[int] = None) -> int:
+    """Append one event to the bank balance ledger and return its id. Never updated or deleted afterwards.
+
+    kind 'set': amount_cents is the ABSOLUTE balance the user typed (meta = highest expense id at that moment).
+    kinds 'pay', 'pay_adjust', 'recurring': amount_cents is a signed change (income positive, costs negative).
+    (kind, ref) must be unique when ref is not empty (a second insert raises ValueError).
+    """
+    _validate_iso_date(date)
+    if kind not in ("set", "pay", "pay_adjust", "recurring"):
+        raise ValueError("invalid balance event kind")
+    if not isinstance(amount_cents, int) or isinstance(amount_cents, bool):
+        raise ValueError("amount_cents must be an integer")
+    created = datetime.datetime.now().isoformat(timespec="seconds")
+    try:
+        with conn:
+            cur = conn.execute(
+                "INSERT INTO balance_events (date, kind, amount_cents, ref, note, meta, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)", (date, kind, amount_cents, ref, note, meta, created))
+    except sqlite3.IntegrityError:
+        raise ValueError("this balance event already exists") from None
+    return int(cur.lastrowid)
+
+
+def list_balance_events(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """All ledger events, oldest first (by id)."""
+    rows = conn.execute("SELECT * FROM balance_events ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_balance_config(conn: sqlite3.Connection) -> dict[str, Any]:
+    row = conn.execute("SELECT pay_day FROM balance_config WHERE id = 1").fetchone()
+    return {"pay_day": row["pay_day"] if row else 5}
+
+
+def update_balance_config(conn: sqlite3.Connection, pay_day: int) -> dict[str, Any]:
+    if not isinstance(pay_day, int) or isinstance(pay_day, bool) or not 1 <= pay_day <= 28:
+        raise ValueError("The pay day must be a whole day between 1 and 28")
+    with conn:
+        conn.execute("UPDATE balance_config SET pay_day = ? WHERE id = 1", (pay_day,))
+    return get_balance_config(conn)
+
+
+def max_expense_id(conn: sqlite3.Connection) -> int:
+    row = conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM expenses").fetchone()
+    return int(row["m"])
 
 
 def get_roster_mail(conn: sqlite3.Connection, message_id: str, sender: str, name: str) -> Optional[dict[str, Any]]:
