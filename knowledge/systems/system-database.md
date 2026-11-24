@@ -9,19 +9,19 @@ Stores application settings, monthly income records, calendar-mode work days, re
 Handles schema migrations on startup and enforces data integrity across all models.
 
 ## Files
-- `src/db.py`: schema definitions, migration helper (`_add_missing_columns`), connection factory (`connect`), and query functions for `settings`, `income`, `work_days`, `recurring`, `expenses`, and `google_sync`.
+- `src/db.py`: schema definitions, migration helper (`_add_missing_columns`), connection factory (`connect`), and query functions for `settings`, `income`, `work_days`, `recurring`, `expenses`, `google_sync` and `google_config`.
 - `tests/test_db.py`: its tests (covers schema creation, column migrations, settings validation, income snapshots, calendar days, recurring costs, expenses, and SQL injection safety).
 
 ## How it connects
 - Uses: [Pay calculation](system-pay-calc.md) (`calc.pay_month` for date validation and month shift).
 - Used by: [Web application](system-web-app.md), [Calendar UI](system-calendar-ui.md), and [Google Calendar sync](system-google-calendar.md).
-- Data: reads and writes SQLite tables (`settings`, `income`, `work_days`, `recurring`, `expenses`, `google_sync`). Money is integer cents, dates are ISO strings (`YYYY-MM-DD` or `YYYY-MM`), and RSZ is stored in basis points.
+- Data: reads and writes SQLite tables (`settings`, `income`, `work_days`, `recurring`, `expenses`, `google_sync`, `google_config`). Money is integer cents, dates are ISO strings (`YYYY-MM-DD` or `YYYY-MM`), and RSZ is stored in basis points.
 
 ## Why it is built this way
 - Settings snapshots: `income` rows freeze a copy of settings at creation (`rate_cents`, `allowance_cents`, `rsz_bp`, percentages) so historical payslips do not change when settings update.
 - Pay month key: `income` is keyed by `pay_month` (`YYYY-MM`) because finances track received pay, while storing the preceding `work_month`.
 - Startup migrations: `_add_missing_columns` checks `PRAGMA table_info` in `connect` to add new columns to existing databases without external migration packages.
-- Single-row tables: `settings` and `google_sync` enforce `CHECK (id = 1)` to guarantee exactly one active configuration row.
+- Single-row tables: `settings`, `google_sync` and `google_config` enforce `CHECK (id = 1)` to guarantee exactly one active configuration row.
 - Calendar mode: `save_month_days` atomically replaces `work_days` for a month and synchronizes derived totals (`days`, `sundays`, `minutes_override`, `holiday_minutes`) into `income` with `per_day = 1`.
 - Derived Sunday premium: `sunday_premium_cents` in `settings` is derived from `sunday_cents_per_hour` and `sunday_cap_minutes` rather than edited directly.
 - Cascading deletes: `delete_income` explicitly deletes associated `work_days` for the month before removing the `income` row.

@@ -87,7 +87,7 @@
   </div>
   {% if google.message %}<p class="{{ 'notice' if google.message[0] == 'ok' else 'error' }}">{{ google.message[1] }}</p>{% endif %}
   {% if not google.configured %}
-  <p class="help-text">Not set up yet. Add GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI to the server's .env file and restart the app.</p>
+  <p class="help-text">Not set up yet. Create an OAuth client in Google Cloud (steps below) and fill it in here.</p>
   {% elif not google.connected %}
   <p class="help-text">Put every day you work into a separate "Work" calendar in your Google Calendar, automatically. The app can only see and change that one calendar.</p>
   <form method="post" action="{{ url_for('google_connect') }}">
@@ -109,6 +109,94 @@
     </form>
   </div>
   {% endif %}
+
+  <h3>Google app credentials</h3>
+  {% if google.connected %}
+  <p>Client id: {{ google.client_id }}</p>
+  <p class="help-text">Disconnect to change the credentials.</p>
+  {% else %}
+  <form method="post" action="{{ url_for('google_credentials') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if google.source == "env" %}
+    <p class="help-text">Currently using the values from the server's .env file. Saving here replaces them.</p>
+    {% endif %}
+    <label>Client ID
+      <input type="text" name="client_id" value="{{ google.client_id }}">
+    </label>
+    <label>Client secret
+      <input type="password" name="client_secret" autocomplete="off" value="" placeholder="{{ 'Saved — leave empty to keep' if google.has_secret else 'From Google Cloud' }}">
+    </label>
+    <label>Redirect URI
+      <input type="url" name="redirect_uri" value="{{ google.redirect_uri or google.suggested_redirect }}">
+    </label>
+    <p class="help-text">Authorized redirect URI to add in Google Cloud: <code>{{ google.suggested_redirect }}</code></p>
+    <div class="google-actions">
+      <button type="submit">Save credentials</button>
+    </div>
+  </form>
+  {% if google.source == "app" %}
+  <form method="post" action="{{ url_for('google_credentials') }}" style="margin-top: 10px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="clear">
+    <button type="submit" class="btn-secondary">Remove credentials</button>
+  </form>
+  {% endif %}
+  <ol class="help-text" style="padding-left: 20px; margin-top: 14px;">
+    <li>console.cloud.google.com: create a project and enable the Google Calendar API.</li>
+    <li>OAuth consent screen: External, add yourself as test user, then Publish app (otherwise access stops after 7 days).</li>
+    <li>Credentials: OAuth client ID, type Web application, add the redirect URI above.</li>
+    <li>Paste the client id and secret here, save, then Connect.</li>
+  </ol>
+  {% endif %}
+
+  {% set ns = namespace(work_hex='', holiday_hex='') %}
+  {% for c in google.colors %}
+    {% if c.id == google.look.work_color %}{% set ns.work_hex = c.hex %}{% endif %}
+    {% if c.id == google.look.holiday_color %}{% set ns.holiday_hex = c.hex %}{% endif %}
+  {% endfor %}
+
+  <h3>Calendar events</h3>
+  <form method="post" action="{{ url_for('google_options') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      <label>Weekdays from
+        <input type="time" name="weekday_from" value="{{ google.look.weekday_from }}">
+      </label>
+      <label>Weekdays to
+        <input type="time" name="weekday_to" value="{{ google.look.weekday_to }}">
+      </label>
+      <label>Weekend from
+        <input type="time" name="weekend_from" value="{{ google.look.weekend_from }}">
+      </label>
+      <label>Weekend to
+        <input type="time" name="weekend_to" value="{{ google.look.weekend_to }}">
+      </label>
+      <label>Work day color
+        <span style="display: flex; align-items: center; gap: 8px;">
+          <select name="work_color">
+            <option value="" {% if not google.look.work_color %}selected{% endif %}>Calendar default</option>
+            {% for c in google.colors %}
+            <option value="{{ c.id }}" {% if c.id == google.look.work_color %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+          <span class="color-swatch" style="background: {{ ns.work_hex }};"></span>
+        </span>
+      </label>
+      <label>Holiday color
+        <span style="display: flex; align-items: center; gap: 8px;">
+          <select name="holiday_color">
+            <option value="" {% if not google.look.holiday_color %}selected{% endif %}>Calendar default</option>
+            {% for c in google.colors %}
+            <option value="{{ c.id }}" {% if c.id == google.look.holiday_color %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+          <span class="color-swatch" style="background: {{ ns.holiday_hex }};"></span>
+        </span>
+      </label>
+    </div>
+    <p class="help-text">Work days become events at these hours (Monday–Friday / Saturday–Sunday). Holidays stay all-day. The hours in the title are the hours you logged.</p>
+    <button type="submit">Save event settings</button>
+  </form>
 </section>
 {% endif %}
 {% endblock %}

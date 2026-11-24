@@ -7,6 +7,13 @@ class ConfigError(RuntimeError):
     pass
 
 
+def validate_redirect_uri(uri: str) -> None:
+    parts = urllib.parse.urlsplit(uri)
+    local = parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1")
+    if not (parts.scheme == "https" and parts.hostname) and not local:
+        raise ConfigError("GOOGLE_REDIRECT_URI must be an https:// address")
+
+
 def load(env=None):
     """Return the config dict. Raises ConfigError when a required secret is missing."""
     env = os.environ if env is None else env
@@ -27,10 +34,7 @@ def load(env=None):
         raise ConfigError("Set all of GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI, or none")
     uri = google["GOOGLE_REDIRECT_URI"]
     if uri:
-        parts = urllib.parse.urlsplit(uri)
-        local = parts.scheme == "http" and parts.hostname in ("localhost", "127.0.0.1")
-        if not (parts.scheme == "https" and parts.hostname) and not local:
-            raise ConfigError("GOOGLE_REDIRECT_URI must be an https:// address")
+        validate_redirect_uri(uri)
     return {
         **google,
         "PASSWORD": password,

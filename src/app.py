@@ -70,16 +70,74 @@ GOOGLE_MESSAGES = {
     "connected_error": ("error", "Connected, but the first sync failed. See the error below and try Sync now."),
     "denied": ("error", "Google access was not given."),
     "badstate": ("error", "That Google sign-in link was old or not started here. Try Connect again."),
-    "failed": ("error", "Google sign-in failed. Check the client id, secret and redirect URI, then try again."),
+    "failed": ("error", "Google sign-in failed. Check the client id, secret and redirect URI in the Google Calendar card, then try again."),
     "synced": ("ok", "All months synced to Google Calendar."),
     "syncfailed": ("error", "Sync failed. See the error below."),
     "disconnected": ("ok", "Google Calendar disconnected. Events already in the \"Work\" calendar stay there."),
+    "disconnect_first": ("error", "Disconnect Google Calendar first, then change the credentials."),
+    "creds_saved": ("ok", "Google credentials saved. You can connect now."),
+    "creds_cleared": ("ok", "Google credentials removed."),
+    "options_saved": ("ok", "Calendar event settings saved."),
+    "options_synced": ("ok", "Calendar event settings saved and all months updated in Google Calendar."),
+    "options_syncfailed": ("error", "Settings saved, but updating Google Calendar failed. See the error below."),
 }
 
 
-def _gcal_configured() -> bool:
-    cfg = current_app.config
-    return bool(cfg.get("GOOGLE_CLIENT_ID") and cfg.get("GOOGLE_CLIENT_SECRET") and cfg.get("GOOGLE_REDIRECT_URI"))
+def _gcal_creds(conn) -> tuple | None:
+    cfg = db.get_google_config(conn)
+    if cfg["client_id"] and cfg["client_secret"] and cfg["redirect_uri"]:
+        return (cfg["client_id"], cfg["client_secret"], cfg["redirect_uri"])
+    app_cfg = current_app.config
+    cid = app_cfg.get("GOOGLE_CLIENT_ID")
+    sec = app_cfg.get("GOOGLE_CLIENT_SECRET")
+    red = app_cfg.get("GOOGLE_REDIRECT_URI")
+    if cid and sec and red:
+        return (cid, sec, red)
+    return None
+
+
+def _stored_id_with_secret(conn) -> str:
+    """The client id saved in the app, or "" when no secret is saved with it."""
+    cfg = db.get_google_config(conn)
+    return cfg["client_id"] if cfg["client_secret"] else ""
+
+
+def _gcal_configured(conn) -> bool:
+    return _gcal_creds(conn) is not None
+
+
+def _format_hhmm(minutes: int) -> str:
+    if minutes == 1440:
+        return "24:00"
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+def _parse_hhmm(text: str, label: str) -> int:
+    s = (text or "").strip()
+    parts = s.split(":")
+    if len(parts) == 2:
+        h_str, m_str = parts[0], parts[1]
+        if len(h_str) in (1, 2) and h_str.isdigit() and len(m_str) == 2 and m_str.isdigit():
+            h = int(h_str)
+            m = int(m_str)
+            if 0 <= h <= 23 and 0 <= m <= 59:
+                return h * 60 + m
+    raise ValueError(f"{label}: enter a time like 07:30")
+
+
+HEX_COLORS = {
+    "1": "#7986cb",
+    "2": "#33b679",
+    "3": "#8e24aa",
+    "4": "#e67c73",
+    "5": "#f6bf26",
+    "6": "#f4511e",
+    "7": "#039be5",
+    "8": "#616161",
+    "9": "#3f51b5",
+    "10": "#0b8043",
+    "11": "#d50000",
+}
 
 
 def _gcal_transport():
@@ -91,14 +149,16 @@ def _gcal_sync(conn, months):
 
     Never raises for Google problems: the error is stored and shown in Settings.
     """
-    if not _gcal_configured():
+    creds = _gcal_creds(conn)
+    if creds is None:
         return None
-    cfg = current_app.config
+    client_id, client_secret, redirect_uri = creds
+    look = db.get_google_config(conn)
     with gcal.sync_lock:
         row = db.get_google(conn)  # read inside the lock: another save may have just created the calendar
         if row is None:
             return None
-        client = gcal.Client(cfg["GOOGLE_CLIENT_ID"], cfg["GOOGLE_CLIENT_SECRET"], row["refresh_token"],
+        client = gcal.Client(client_id, client_secret, row["refresh_token"],
                              _gcal_transport())
         try:
             cal_id = row["calendar_id"]
@@ -110,7 +170,7 @@ def _gcal_sync(conn, months):
             i = 0
             while i < len(todo):
                 try:
-                    gcal.sync_month(client, cal_id, todo[i], db.list_days(conn, todo[i]))
+                    gcal.sync_month(client, cal_id, todo[i], db.list_days(conn, todo[i]), look=look)
                     i += 1
                 except gcal.GcalError as err:
                     if err.status != 404 or recreated:
@@ -134,13 +194,45 @@ def _gcal_sync(conn, months):
 
 def _google_view(conn):
     msg = GOOGLE_MESSAGES.get(request.args.get("google", ""))
-    row = db.get_google(conn) if _gcal_configured() else None
+    cfg = db.get_google_config(conn)
+    app_cfg = current_app.config
+    db_complete = bool(cfg["client_id"] and cfg["client_secret"] and cfg["redirect_uri"])
+    env_complete = bool(
+        app_cfg.get("GOOGLE_CLIENT_ID")
+        and app_cfg.get("GOOGLE_CLIENT_SECRET")
+        and app_cfg.get("GOOGLE_REDIRECT_URI")
+    )
+    if db_complete:
+        source = "app"
+    elif env_complete:
+        source = "env"
+    else:
+        source = None
+
+    row = db.get_google(conn)
+    client_id = cfg["client_id"] if source != "env" else app_cfg.get("GOOGLE_CLIENT_ID", "")
+    suggested = "https://" + request.host + "/google/callback" if request else ""
+
     return {
-        "configured": _gcal_configured(),
+        "message": msg,
+        "configured": _gcal_configured(conn),
         "connected": row is not None,
+        "source": source,
+        "client_id": client_id,
+        "has_secret": bool(cfg["client_secret"]),
+        "redirect_uri": cfg.get("redirect_uri") or "",
+        "suggested_redirect": suggested,
         "last_sync": row["last_sync"] if row else None,
         "last_error": row["last_error"] if row else None,
-        "message": msg,
+        "look": {
+            "weekday_from": _format_hhmm(cfg["weekday_start"]),
+            "weekday_to": _format_hhmm(cfg["weekday_end"]),
+            "weekend_from": _format_hhmm(cfg["weekend_start"]),
+            "weekend_to": _format_hhmm(cfg["weekend_end"]),
+            "work_color": cfg["work_color"],
+            "holiday_color": cfg["holiday_color"],
+        },
+        "colors": [{"id": cid, "name": name, "hex": HEX_COLORS.get(cid, "")} for cid, name in gcal.COLORS],
     }
 
 
@@ -763,16 +855,22 @@ def create_app(cfg: dict) -> Flask:
 
     @app.route("/google/connect", methods=["POST"])
     def google_connect():
-        if not _gcal_configured():
+        conn = get_db()
+        creds = _gcal_creds(conn)
+        if creds is None:
             abort(404)
+        client_id, client_secret, redirect_uri = creds
         state = secrets.token_urlsafe(32)
         session["gcal_state"] = state
-        return redirect(gcal.auth_url(app.config["GOOGLE_CLIENT_ID"], app.config["GOOGLE_REDIRECT_URI"], state), code=303)
+        return redirect(gcal.auth_url(client_id, redirect_uri, state), code=303)
 
     @app.route("/google/callback")
     def google_callback():
-        if not _gcal_configured():
+        conn = get_db()
+        creds = _gcal_creds(conn)
+        if creds is None:
             abort(404)
+        client_id, client_secret, redirect_uri = creds
         expected = session.pop("gcal_state", None)
         got = request.args.get("state", "")
         if not expected or not hmac.compare_digest(expected.encode(), got.encode()):
@@ -780,20 +878,19 @@ def create_app(cfg: dict) -> Flask:
         if request.args.get("error") or not request.args.get("code"):
             return _to_settings("denied")
         try:
-            refresh = gcal.exchange_code(app.config["GOOGLE_CLIENT_ID"], app.config["GOOGLE_CLIENT_SECRET"],
-                                         app.config["GOOGLE_REDIRECT_URI"], request.args["code"], _gcal_transport())
+            refresh = gcal.exchange_code(client_id, client_secret, redirect_uri,
+                                         request.args["code"], _gcal_transport())
         except gcal.GcalError:
             return _to_settings("failed")
-        conn = get_db()
         db.connect_google(conn, refresh)
         result = _gcal_sync(conn, db.worked_months(conn))
         return _to_settings("connected" if result == "ok" else "connected_error")
 
     @app.route("/google/sync", methods=["POST"])
     def google_sync():
-        if not _gcal_configured():
-            abort(404)
         conn = get_db()
+        if not _gcal_configured(conn):
+            abort(404)
         if db.get_google(conn) is None:
             return _to_settings("syncfailed")
         result = _gcal_sync(conn, db.worked_months(conn))
@@ -801,14 +898,78 @@ def create_app(cfg: dict) -> Flask:
 
     @app.route("/google/disconnect", methods=["POST"])
     def google_disconnect():
-        if not _gcal_configured():
-            abort(404)
         conn = get_db()
+        if not _gcal_configured(conn):
+            abort(404)
         row = db.get_google(conn)
         if row is not None:
             gcal.revoke(row["refresh_token"], _gcal_transport())
             db.delete_google(conn)
         return _to_settings("disconnected")
+
+    @app.route("/google/credentials", methods=["POST"])
+    def google_credentials():
+        conn = get_db()
+        if db.get_google(conn) is not None:
+            return _to_settings("disconnect_first")
+
+        if request.form.get("action") == "clear":
+            db.update_google_config(conn, client_id="", client_secret="", redirect_uri="")
+            return _to_settings("creds_cleared")
+
+        client_id = request.form.get("client_id", "").strip()
+        redirect_uri = request.form.get("redirect_uri", "").strip()
+        secret_input = request.form.get("client_secret", "")
+
+        fields = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+        }
+        if secret_input.strip():
+            fields["client_secret"] = secret_input.strip()
+        elif client_id and _stored_id_with_secret(conn) not in ("", client_id):
+            # a new client id needs its own secret: never pair it with the stored one
+            g_view = _google_view(conn)
+            g_view["message"] = ("error", "Enter the client secret that belongs to the new client id.")
+            return render_template("settings.html", settings=db.get_settings(conn), google=g_view), 400
+
+        try:
+            db.update_google_config(conn, **fields)
+            return _to_settings("creds_saved")
+        except ValueError as err:
+            g_view = _google_view(conn)
+            g_view["message"] = ("error", str(err))
+            return render_template("settings.html", settings=db.get_settings(conn), google=g_view), 400
+
+    @app.route("/google/options", methods=["POST"])
+    def google_options():
+        conn = get_db()
+        try:
+            weekday_start = _parse_hhmm(request.form.get("weekday_from", ""), "Weekdays from")
+            weekday_end = _parse_hhmm(request.form.get("weekday_to", ""), "Weekdays to")
+            weekend_start = _parse_hhmm(request.form.get("weekend_from", ""), "Weekend from")
+            weekend_end = _parse_hhmm(request.form.get("weekend_to", ""), "Weekend to")
+            work_color = request.form.get("work_color", "").strip()
+            holiday_color = request.form.get("holiday_color", "").strip()
+
+            db.update_google_config(
+                conn,
+                weekday_start=weekday_start,
+                weekday_end=weekday_end,
+                weekend_start=weekend_start,
+                weekend_end=weekend_end,
+                work_color=work_color,
+                holiday_color=holiday_color,
+            )
+        except ValueError as err:
+            g_view = _google_view(conn)
+            g_view["message"] = ("error", str(err))
+            return render_template("settings.html", settings=db.get_settings(conn), google=g_view), 400
+
+        if _gcal_configured(conn) and db.get_google(conn) is not None:
+            res = _gcal_sync(conn, db.worked_months(conn))
+            return _to_settings("options_synced" if res == "ok" else "options_syncfailed")
+        return _to_settings("options_saved")
 
     return app
 

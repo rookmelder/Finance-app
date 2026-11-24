@@ -4,7 +4,7 @@ from datetime import date
 import sqlite3
 from typing import Any, Optional
 
-from src import calc
+from src import calc, config
 
 
 def _validate_month(m: str) -> str:
@@ -113,6 +113,20 @@ def connect(path: str) -> sqlite3.Connection:
                 last_error TEXT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS google_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                client_id TEXT NOT NULL DEFAULT '',
+                client_secret TEXT NOT NULL DEFAULT '',
+                redirect_uri TEXT NOT NULL DEFAULT '',
+                weekday_start INTEGER NOT NULL DEFAULT 450,
+                weekday_end INTEGER NOT NULL DEFAULT 930,
+                weekend_start INTEGER NOT NULL DEFAULT 510,
+                weekend_end INTEGER NOT NULL DEFAULT 990,
+                work_color TEXT NOT NULL DEFAULT '6',
+                holiday_color TEXT NOT NULL DEFAULT '2'
+            )
+        """)
         # Migrate databases made before these columns existed
         _add_missing_columns(conn, "settings", {
             "clothing_cents": "INTEGER NOT NULL DEFAULT 0",
@@ -137,6 +151,9 @@ def connect(path: str) -> sqlite3.Connection:
                 id, rate_cents, allowance_cents, minutes_per_day,
                 other_cents, needs_pct, free_pct, save_pct, carry_over
             ) VALUES (1, 0, 0, 450, 0, 50, 20, 30, 1)
+        """)
+        conn.execute("""
+            INSERT OR IGNORE INTO google_config (id) VALUES (1)
         """)
     return conn
 
@@ -605,6 +622,76 @@ def update_google(conn: sqlite3.Connection, **fields) -> None:
 def delete_google(conn: sqlite3.Connection) -> None:
     with conn:
         conn.execute("DELETE FROM google_sync WHERE id = 1")
+
+
+# --- Google Calendar config (one row, id = 1) ---
+
+def get_google_config(conn: sqlite3.Connection) -> dict[str, Any]:
+    row = conn.execute("SELECT * FROM google_config WHERE id = 1").fetchone()
+    if row is None:
+        raise ValueError("Google config not initialized")
+    return dict(row)
+
+
+def update_google_config(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
+    allowed_fields = {
+        "client_id", "client_secret", "redirect_uri",
+        "weekday_start", "weekday_end",
+        "weekend_start", "weekend_end",
+        "work_color", "holiday_color",
+    }
+    for k in fields:
+        if k not in allowed_fields:
+            raise ValueError(f"Unknown google config field: {k}")
+
+    current = get_google_config(conn)
+    merged = {**current, **fields}
+
+    for str_field in ("client_id", "client_secret", "redirect_uri"):
+        val = merged[str_field]
+        if not isinstance(val, str):
+            raise ValueError(f"{str_field} must be a string")
+        val = val.strip()
+        if len(val) > 500:
+            raise ValueError(f"{str_field} cannot exceed 500 characters")
+        merged[str_field] = val
+
+    if merged["redirect_uri"]:
+        try:
+            config.validate_redirect_uri(merged["redirect_uri"])
+        except config.ConfigError:
+            raise ValueError("Redirect URI must be an https:// address")
+
+    creds = [merged["client_id"], merged["client_secret"], merged["redirect_uri"]]
+    has_creds = [bool(c) for c in creds]
+    if any(has_creds) and not all(has_creds):
+        raise ValueError("Fill in client id, client secret and redirect URI, or leave all three empty")
+
+    for hour_field in ("weekday_start", "weekday_end", "weekend_start", "weekend_end"):
+        val = merged[hour_field]
+        if not isinstance(val, int) or isinstance(val, bool) or val < 0 or val > 1440:
+            raise ValueError(f"{hour_field} must be an integer between 0 and 1440")
+
+    if merged["weekday_start"] >= merged["weekday_end"]:
+        raise ValueError("Weekday work hours: 'from' must be before 'to'")
+
+    if merged["weekend_start"] >= merged["weekend_end"]:
+        raise ValueError("Weekend work hours: 'from' must be before 'to'")
+
+    allowed_colors = {str(i) for i in range(1, 12)} | {""}
+    for color_field in ("work_color", "holiday_color"):
+        val = merged[color_field]
+        if not isinstance(val, str) or val not in allowed_colors:
+            raise ValueError(f"{color_field} must be one of '' or '1'..'11'")
+
+    if not fields:
+        return current
+
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    with conn:
+        conn.execute(f"UPDATE google_config SET {sets} WHERE id = 1", [merged[k] for k in fields])
+
+    return get_google_config(conn)
 
 
 def worked_months(conn: sqlite3.Connection) -> list[str]:

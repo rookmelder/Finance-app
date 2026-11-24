@@ -8,6 +8,7 @@ All HTTP goes through a transport callable(method, url, headers, body_bytes_or_N
 so tests can pass a fake one and never touch the network.
 """
 import datetime
+import hashlib
 import http.client
 import json
 import threading
@@ -25,7 +26,31 @@ CALENDAR_NAME = "Work"
 TIMEZONE = "Europe/Brussels"
 TAG_APP = "financeApp"
 TAG_DATE = "financeDate"
+TAG_SIG = "financeSig"
 TIMEOUT = 10
+
+COLORS = [
+    ("1", "Lavender"),
+    ("2", "Sage"),
+    ("3", "Grape"),
+    ("4", "Flamingo"),
+    ("5", "Banana"),
+    ("6", "Tangerine"),
+    ("7", "Peacock"),
+    ("8", "Graphite"),
+    ("9", "Blueberry"),
+    ("10", "Basil"),
+    ("11", "Tomato"),
+]
+
+DEFAULT_LOOK = {
+    "weekday_start": 450,
+    "weekday_end": 930,
+    "weekend_start": 510,
+    "weekend_end": 990,
+    "work_color": "6",
+    "holiday_color": "2",
+}
 
 sync_lock = threading.Lock()
 _token_cache = {}  # refresh_token -> (access_token, expires_at)
@@ -203,8 +228,8 @@ class Client:
     def insert_event(self, calendar_id, body):
         return self.call("POST", "/calendars/" + urllib.parse.quote(calendar_id, safe="") + "/events", body=body)
 
-    def patch_event(self, calendar_id, event_id, body):
-        return self.call("PATCH", "/calendars/" + urllib.parse.quote(calendar_id, safe="") + "/events/"
+    def update_event(self, calendar_id, event_id, body):
+        return self.call("PUT", "/calendars/" + urllib.parse.quote(calendar_id, safe="") + "/events/"
                          + urllib.parse.quote(event_id, safe=""), body=body)
 
     def delete_event(self, calendar_id, event_id):
@@ -220,17 +245,58 @@ def _hours(minutes):
     return f"{minutes / 60:.2f}".rstrip("0").rstrip(".")
 
 
-def event_body(day):
-    """The all-day event for one worked day {"date", "minutes", "holiday"}."""
-    start = datetime.date.fromisoformat(day["date"])
+def _format_time(d, minutes):
+    if minutes == 1440:
+        return f"{(d + datetime.timedelta(days=1)).isoformat()}T00:00:00"
+    h, m = divmod(minutes, 60)
+    return f"{d.isoformat()}T{h:02d}:{m:02d}:00"
+
+
+def _sig(body):
+    payload = json.dumps(body, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()[:16]
+
+
+def event_body(day, look=None):
+    """The calendar event for one worked day {"date", "minutes", "holiday"}."""
+    if look is None:
+        look = DEFAULT_LOOK
+    d = datetime.date.fromisoformat(day["date"])
     title = ("Holiday " if day["holiday"] else "Work ") + _hours(day["minutes"]) + "h"
-    return {
-        "summary": title,
-        "start": {"date": start.isoformat()},
-        "end": {"date": (start + datetime.timedelta(days=1)).isoformat()},
-        "transparency": "opaque",
-        "extendedProperties": {"private": {TAG_APP: "1", TAG_DATE: start.isoformat()}},
+    if day["holiday"]:
+        body = {
+            "summary": title,
+            "start": {"date": d.isoformat()},
+            "end": {"date": (d + datetime.timedelta(days=1)).isoformat()},
+            "transparency": "opaque",
+        }
+        if look.get("holiday_color", "") != "":
+            body["colorId"] = look["holiday_color"]
+    else:
+        if d.weekday() >= 5:
+            start_min = look["weekend_start"]
+            end_min = look["weekend_end"]
+        else:
+            start_min = look["weekday_start"]
+            end_min = look["weekday_end"]
+        body = {
+            "summary": title,
+            "start": {"dateTime": _format_time(d, start_min), "timeZone": TIMEZONE},
+            "end": {"dateTime": _format_time(d, end_min), "timeZone": TIMEZONE},
+            "transparency": "opaque",
+        }
+        if look.get("work_color", "") != "":
+            body["colorId"] = look["work_color"]
+
+    sig = _sig(body)
+    body["extendedProperties"] = {
+        "private": {
+            TAG_APP: "1",
+            TAG_DATE: d.isoformat(),
+            TAG_SIG: sig,
+        }
     }
+    return body
 
 
 def month_bounds(work_month):
@@ -241,13 +307,13 @@ def month_bounds(work_month):
     return first.isoformat(), nxt.isoformat()
 
 
-def plan_month(work_month, days, events):
+def plan_month(work_month, days, events, look=None):
     """Diff wanted days against existing tagged events.
 
-    Returns (inserts, patches, deletes): inserts = [body], patches = [(event_id, body)], deletes = [event_id].
+    Returns (inserts, updates, deletes): inserts = [body], updates = [(event_id, body)], deletes = [event_id].
     Only events tagged with a date in work_month are considered; duplicates for a date are deleted.
     """
-    wanted = {d["date"]: event_body(d) for d in days if d["date"].startswith(work_month + "-")}
+    wanted = {d["date"]: event_body(d, look=look) for d in days if d["date"].startswith(work_month + "-")}
     seen = {}
     deletes = []
     for ev in events:
@@ -258,30 +324,32 @@ def plan_month(work_month, days, events):
             deletes.append(ev["id"])
         else:
             seen[tag] = ev
-    inserts, patches = [], []
+    inserts, updates = [], []
     for date, body in sorted(wanted.items()):
         ev = seen.get(date)
         if ev is None:
             inserts.append(body)
-        elif (ev.get("summary") != body["summary"] or (ev.get("start") or {}).get("date") != body["start"]["date"]
-              or (ev.get("end") or {}).get("date") != body["end"]["date"]):
-            patches.append((ev["id"], body))
-    return inserts, patches, deletes
+        else:
+            ev_sig = (ev.get("extendedProperties") or {}).get("private", {}).get(TAG_SIG, "")
+            wanted_sig = body["extendedProperties"]["private"][TAG_SIG]
+            if ev_sig != wanted_sig:
+                updates.append((ev["id"], body))
+    return inserts, updates, deletes
 
 
-def sync_month(client, calendar_id, work_month, days):
-    """Make the calendar match days for one work month. Returns {"inserted", "patched", "deleted"}."""
+def sync_month(client, calendar_id, work_month, days, look=None):
+    """Make the calendar match days for one work month. Returns {"inserted", "updated", "deleted"}."""
     first, after = month_bounds(work_month)
     # a day of margin on each side: all-day events are in the calendar's time zone, not UTC
     margin = datetime.timedelta(days=1)
     lo = (datetime.date.fromisoformat(first) - margin).isoformat()
     hi = (datetime.date.fromisoformat(after) + margin).isoformat()
     events = client.list_tagged_events(calendar_id, lo, hi)
-    inserts, patches, deletes = plan_month(work_month, days, events)
+    inserts, updates, deletes = plan_month(work_month, days, events, look=look)
     for event_id in deletes:
         client.delete_event(calendar_id, event_id)
-    for event_id, body in patches:
-        client.patch_event(calendar_id, event_id, body)
+    for event_id, body in updates:
+        client.update_event(calendar_id, event_id, body)
     for body in inserts:
         client.insert_event(calendar_id, body)
-    return {"inserted": len(inserts), "patched": len(patches), "deleted": len(deletes)}
+    return {"inserted": len(inserts), "updated": len(updates), "deleted": len(deletes)}
