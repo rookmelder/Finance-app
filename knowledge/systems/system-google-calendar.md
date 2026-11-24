@@ -34,7 +34,7 @@ The app is the source of truth; edits made in Google to these events are overwri
 
 ## Setup (once)
 1. console.cloud.google.com: new project, enable **Google Calendar API**.
-2. OAuth consent screen: External, add yourself as user, scope `.../auth/calendar.app.created`, then **Publish app** (In production). In Testing mode refresh tokens expire after 7 days.
+2. OAuth consent screen (Branding: home page `https://rookmelder.github.io/Finance-app/`, privacy policy `https://rookmelder.github.io/Finance-app/privacy.html`, authorized domain `rookmelder.github.io`; the pages are `docs/` in this repo, served by GitHub Pages): External, add yourself as user, scope `.../auth/calendar.app.created`, then **Publish app** (In production). In Testing mode refresh tokens expire after 7 days.
 3. Credentials: OAuth client ID, type **Web application**, authorized redirect URI `https://<your domain>/google/callback`.
 4. Settings → Google Calendar → paste client id and secret (the redirect URI is prefilled), Save credentials. (The three `GOOGLE_*` values in `.env` still work as a fallback.)
 5. Connect Google Calendar (click past the "unverified app" warning).

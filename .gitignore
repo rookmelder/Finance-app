@@ -4,5 +4,6 @@ SETUP.md
 __pycache__/
 .obsidian
 data/
+*.db
 __pycache__/
 *.pyc
