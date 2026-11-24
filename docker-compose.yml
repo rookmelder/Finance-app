@@ -11,3 +11,4 @@ services:
 
 volumes:
   finance-data:
+    name: multi-agent_finance-data   # fixed name: the data stays when the project folder is renamed
