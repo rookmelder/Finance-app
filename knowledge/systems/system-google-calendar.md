@@ -4,6 +4,8 @@
 Back to [Systems](systems.md).
 
 ## What it does
+(Imported or hand-picked shifts: a day with a shift code is a timed event at the shift's own start/end with the title `Work V`; days without a shift keep `Work 7.5h` at the Settings hours. Connecting now asks for `gmail.readonly` as well, used by [Roster import](system-roster-import.md); `google_sync.scopes` records what was granted.)
+
 Every calendar save (and "Sync all months now" in Settings) makes the app-created "Work" calendar match the
 worked days of that work month: one event per day, titled `Work 7.5h` or `Holiday 7.5h`. Work days are timed
 events at the work hours set in Settings (weekdays / Saturday-Sunday, default 07:30-15:30 / 08:30-16:30); holidays

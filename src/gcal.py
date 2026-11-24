@@ -22,6 +22,7 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 API = "https://www.googleapis.com/calendar/v3"
 SCOPE = "https://www.googleapis.com/auth/calendar.app.created"
+SCOPE_GMAIL = "https://www.googleapis.com/auth/gmail.readonly"  # read the roster mails; optional
 CALENDAR_NAME = "Work"
 TIMEZONE = "Europe/Brussels"
 TAG_APP = "financeApp"
@@ -96,7 +97,7 @@ def auth_url(client_id, redirect_uri, state):
         "client_id": client_id,
         "redirect_uri": redirect_uri,
         "response_type": "code",
-        "scope": SCOPE,
+        "scope": SCOPE + " " + SCOPE_GMAIL,
         "access_type": "offline",
         "prompt": "consent",
         "include_granted_scopes": "false",
@@ -112,6 +113,12 @@ def _post_form(transport, url, fields):
 
 def exchange_code(client_id, client_secret, redirect_uri, code, transport=urllib_transport):
     """Trade the callback code for tokens. Returns the refresh token; raises GcalError."""
+    return exchange_code_scopes(client_id, client_secret, redirect_uri, code, transport)[0]
+
+
+def exchange_code_scopes(client_id, client_secret, redirect_uri, code, transport=urllib_transport):
+    """Like exchange_code, but returns (refresh token, list of granted scopes). The Calendar scope is required,
+    the Gmail scope is not (the user may untick it). An empty list means Google did not say."""
     status, raw = _post_form(transport, TOKEN_URL, {
         "code": code,
         "client_id": client_id,
@@ -130,7 +137,7 @@ def exchange_code(client_id, client_secret, redirect_uri, code, transport=urllib
         raise GcalError("Google sent no refresh token. Disconnect and connect again.", status)
     if data.get("access_token"):
         _cache_put(refresh, data["access_token"], data.get("expires_in", 0))
-    return refresh
+    return refresh, granted
 
 
 def revoke(token, transport=urllib_transport):
@@ -179,6 +186,10 @@ class Client:
             raise GcalError("Could not refresh the Google token (" + str(data.get("error", status)) + ")", status)
         _cache_put(self.refresh_token, data["access_token"], data.get("expires_in", 3600))
         return data["access_token"]
+
+    def access_token(self, force=False):
+        """A valid access token (cached); force=True always asks Google for a new one. Used by gmail.Client."""
+        return self._access_token(force=force)
 
     def call(self, method, path, params=None, body=None):
         """One API call. Returns the decoded JSON (or {}); raises GcalError on any non-2xx."""
@@ -258,12 +269,12 @@ def _sig(body):
 
 
 def event_body(day, look=None):
-    """The calendar event for one worked day {"date", "minutes", "holiday"}."""
+    """The calendar event for one worked day {"date", "minutes", "holiday", ...}."""
     if look is None:
         look = DEFAULT_LOOK
     d = datetime.date.fromisoformat(day["date"])
-    title = ("Holiday " if day["holiday"] else "Work ") + _hours(day["minutes"]) + "h"
-    if day["holiday"]:
+    if day.get("holiday"):
+        title = "Holiday " + _hours(day["minutes"]) + "h"
         body = {
             "summary": title,
             "start": {"date": d.isoformat()},
@@ -273,12 +284,20 @@ def event_body(day, look=None):
         if look.get("holiday_color", "") != "":
             body["colorId"] = look["holiday_color"]
     else:
-        if d.weekday() >= 5:
-            start_min = look["weekend_start"]
-            end_min = look["weekend_end"]
+        code = day.get("code")
+        start_min = day.get("start")
+        end_min = day.get("end")
+        if code and start_min is not None and end_min is not None:
+            title = f"Work {code}"
         else:
-            start_min = look["weekday_start"]
-            end_min = look["weekday_end"]
+            title = "Work " + _hours(day["minutes"]) + "h"
+            if d.weekday() >= 5:
+                start_min = look["weekend_start"]
+                end_min = look["weekend_end"]
+            else:
+                start_min = look["weekday_start"]
+                end_min = look["weekday_end"]
+
         body = {
             "summary": title,
             "start": {"dateTime": _format_time(d, start_min), "timeZone": TIMEZONE},

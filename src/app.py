@@ -3,7 +3,9 @@
 import calendar
 import datetime
 import hmac
+import json
 import os
+import re
 import secrets
 import sys
 from flask import (
@@ -18,7 +20,7 @@ from flask import (
     session,
     url_for,
 )
-from src import auth, calc, config, db, gcal
+from src import auth, calc, config, db, gcal, gmail, roster_sync
 
 
 def get_db():
@@ -80,7 +82,12 @@ GOOGLE_MESSAGES = {
     "options_saved": ("ok", "Calendar event settings saved."),
     "options_synced": ("ok", "Calendar event settings saved and all months updated in Google Calendar."),
     "options_syncfailed": ("error", "Settings saved, but updating Google Calendar failed. See the error below."),
+    "roster_saved": ("ok", "Roster settings saved."),
+    "roster_bad_sender": ("error", "Enter a plain email address for the sender, like name@example.com."),
+    "roster_bad_name": ("error", "Enter your name exactly as it appears in the roster (max 80 characters)."),
 }
+
+SENDER_RE = re.compile(r"^[^@\s\"'()<>{}\\,;:]{1,64}@[^@\s\"'()<>{}\\,;:]{1,190}\.[^@\s\"'()<>{}\\,;:]{2,}$")
 
 
 def _gcal_creds(conn) -> tuple | None:
@@ -192,6 +199,25 @@ def _gcal_sync(conn, months):
             return "error"
 
 
+def _roster_view(conn):
+    cfg = db.get_google_config(conn)
+    state = db.get_roster_state(conn)
+    try:
+        report = json.loads(state["report"]) if state["report"] else None
+    except ValueError:
+        report = None
+    return {"sender": cfg["roster_sender"], "name": cfg["roster_name"],
+            "synced_at": state["synced_at"], "report": report if isinstance(report, dict) else None}
+
+
+def _gmail_client(conn, row):
+    """A Gmail client that uses the stored Google refresh token (the same one as the calendar)."""
+    client_id, client_secret, _ = _gcal_creds(conn)
+    google = gcal.Client(client_id, client_secret, row["refresh_token"], _gcal_transport())
+    return gmail.Client(lambda force=False: google.access_token(force),
+                        current_app.config.get("GMAIL_TRANSPORT") or gmail.urllib_transport)
+
+
 def _google_view(conn):
     msg = GOOGLE_MESSAGES.get(request.args.get("google", ""))
     cfg = db.get_google_config(conn)
@@ -235,6 +261,8 @@ def _google_view(conn):
             "holiday_color": cfg["holiday_color"],
         },
         "colors": [{"id": cid, "name": name, "hex": HEX_COLORS.get(cid, "")} for cid, name in gcal.COLORS],
+        "gmail_ok": bool(row and gcal.SCOPE_GMAIL in (row.get("scopes") or "").split()),
+        "roster": _roster_view(conn),
     }
 
 
@@ -408,6 +436,7 @@ def create_app(cfg: dict) -> Flask:
     # Jinja filters
     app.jinja_env.filters["money"] = calc.format_money
     app.jinja_env.filters["hours"] = calc.format_hours
+    app.jinja_env.filters["hhmm"] = _format_hhmm
     app.jinja_env.filters["percent"] = calc.format_percent_bp
     app.jinja_env.filters["month_label"] = _month_label
     app.jinja_env.globals["pct"] = _pct
@@ -752,6 +781,7 @@ def create_app(cfg: dict) -> Flask:
             "days_in_month": calendar.monthrange(year, mon)[1],
             "holidays": holidays,
             "entries": db.list_days(conn, work_month) if per_day else [],
+            "shifts": db.list_shifts(conn),
             "presets": [
                 {"id": "normal", "label": "Normal day", "minutes": normal, "holiday": False},
                 {"id": "holiday", "label": "Holiday", "minutes": normal, "holiday": True},
@@ -846,10 +876,51 @@ def create_app(cfg: dict) -> Flask:
             except ValueError as err:
                 current_settings = db.get_settings(conn)
                 return render_template("settings.html", settings=current_settings, error=str(err),
-                                       google=_google_view(conn)), 400
+                                       google=_google_view(conn), shifts=db.list_shifts(conn)), 400
 
         current_settings = db.get_settings(conn)
-        return render_template("settings.html", settings=current_settings, google=_google_view(conn))
+        return render_template("settings.html", settings=current_settings, google=_google_view(conn), shifts=db.list_shifts(conn))
+
+    @app.route("/shifts/save", methods=["POST"])
+    def shifts_save():
+        conn = get_db()
+        try:
+            code = request.form.get("code", "")
+            start_str = request.form.get("start", "")
+            end_str = request.form.get("end", "")
+            hours_str = request.form.get("hours", "")
+
+            start_min = _parse_hhmm(start_str, "Start time")
+            end_min = _parse_hhmm(end_str, "End time")
+            minutes = calc.parse_hours(hours_str)
+            db.save_shift(conn, code, start_min, end_min, minutes)
+            return redirect(url_for("settings") + "#shifts", code=303)
+        except ValueError as err:
+            current_settings = db.get_settings(conn)
+            return render_template(
+                "settings.html",
+                settings=current_settings,
+                google=_google_view(conn),
+                shifts=db.list_shifts(conn),
+                error=str(err),
+            ), 400
+
+    @app.route("/shifts/delete", methods=["POST"])
+    def shifts_delete():
+        conn = get_db()
+        try:
+            code = request.form.get("code", "")
+            db.delete_shift(conn, code)
+            return redirect(url_for("settings") + "#shifts", code=303)
+        except ValueError as err:
+            current_settings = db.get_settings(conn)
+            return render_template(
+                "settings.html",
+                settings=current_settings,
+                google=_google_view(conn),
+                shifts=db.list_shifts(conn),
+                error=str(err),
+            ), 400
 
     # 7. Google Calendar sync
     def _to_settings(code):
@@ -880,11 +951,11 @@ def create_app(cfg: dict) -> Flask:
         if request.args.get("error") or not request.args.get("code"):
             return _to_settings("denied")
         try:
-            refresh = gcal.exchange_code(client_id, client_secret, redirect_uri,
-                                         request.args["code"], _gcal_transport())
+            refresh, granted = gcal.exchange_code_scopes(client_id, client_secret, redirect_uri,
+                                                         request.args["code"], _gcal_transport())
         except gcal.GcalError:
             return _to_settings("failed")
-        db.connect_google(conn, refresh)
+        db.connect_google(conn, refresh, " ".join(granted))
         result = _gcal_sync(conn, db.worked_months(conn))
         return _to_settings("connected" if result == "ok" else "connected_error")
 
@@ -933,7 +1004,7 @@ def create_app(cfg: dict) -> Flask:
             # a new client id needs its own secret: never pair it with the stored one
             g_view = _google_view(conn)
             g_view["message"] = ("error", "Enter the client secret that belongs to the new client id.")
-            return render_template("settings.html", settings=db.get_settings(conn), google=g_view), 400
+            return render_template("settings.html", settings=db.get_settings(conn), google=g_view, shifts=db.list_shifts(conn)), 400
 
         try:
             db.update_google_config(conn, **fields)
@@ -941,7 +1012,43 @@ def create_app(cfg: dict) -> Flask:
         except ValueError as err:
             g_view = _google_view(conn)
             g_view["message"] = ("error", str(err))
-            return render_template("settings.html", settings=db.get_settings(conn), google=g_view), 400
+            return render_template("settings.html", settings=db.get_settings(conn), google=g_view, shifts=db.list_shifts(conn)), 400
+
+    @app.route("/roster/settings", methods=["POST"])
+    def roster_settings():
+        conn = get_db()
+        sender = request.form.get("sender", "").strip()
+        raw_name = request.form.get("name", "")
+        name = " ".join(raw_name.split())
+        if sender and not SENDER_RE.match(sender):
+            return redirect(url_for("settings", google="roster_bad_sender") + "#roster", code=303)
+        if len(name) > 80 or any(ord(ch) < 32 and ch not in " \t" for ch in raw_name.strip()):
+            return redirect(url_for("settings", google="roster_bad_name") + "#roster", code=303)
+        db.update_google_config(conn, roster_sender=sender, roster_name=name)
+        return redirect(url_for("settings", google="roster_saved") + "#roster", code=303)
+
+    @app.route("/roster/sync", methods=["POST"])
+    def roster_sync_now():
+        conn = get_db()
+        row = db.get_google(conn)
+        empty = {"months": [], "ignored": 0, "errors": [], "changed_months": []}
+        if row is None or _gcal_creds(conn) is None:
+            report = {**empty, "ok": False, "message": "Connect Google first (Google Calendar card)."}
+        elif gcal.SCOPE_GMAIL not in (row.get("scopes") or "").split():
+            report = {**empty, "ok": False,
+                      "message": "Gmail access was not granted yet. Disconnect Google, connect again and tick the Gmail box."}
+        else:
+            try:
+                report = roster_sync.sync(conn, _gmail_client(conn, row), datetime.date.today())
+            except gcal.GcalError as err:
+                report = {**empty, "ok": False, "message": str(err)}
+            except Exception as err:  # never show a stack trace for a mail problem
+                current_app.logger.warning("Roster sync failed: %s", type(err).__name__)
+                report = {**empty, "ok": False, "message": "Unexpected error while reading your mail (" + type(err).__name__ + ")."}
+            if report.get("changed_months"):
+                report["gcal"] = _gcal_sync(conn, report["changed_months"])
+        db.set_roster_state(conn, datetime.datetime.now().isoformat(timespec="seconds"), json.dumps(report))
+        return redirect(url_for("settings") + "#roster", code=303)
 
     @app.route("/google/options", methods=["POST"])
     def google_options():
@@ -966,7 +1073,7 @@ def create_app(cfg: dict) -> Flask:
         except ValueError as err:
             g_view = _google_view(conn)
             g_view["message"] = ("error", str(err))
-            return render_template("settings.html", settings=db.get_settings(conn), google=g_view), 400
+            return render_template("settings.html", settings=db.get_settings(conn), google=g_view, shifts=db.list_shifts(conn)), 400
 
         if _gcal_configured(conn) and db.get_google(conn) is not None:
             res = _gcal_sync(conn, db.worked_months(conn))

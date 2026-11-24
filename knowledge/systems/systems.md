@@ -10,3 +10,4 @@ Back to the [knowledge map](../README.md). One line per part; each links to its 
 - [Auth and config](system-auth-config.md): login, CSRF, security headers, environment config.
 - [Deployment](system-deployment.md): Docker image, compose volume, run.sh.
 - [Google Calendar sync](system-google-calendar.md): pushes worked days to an app-created "Work" calendar (OAuth, stdlib only).
+- [Roster import](system-roster-import.md): "Sync roster now" reads the boss's roster PDF from Gmail and updates worked days, shifts and times.

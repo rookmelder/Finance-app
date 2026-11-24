@@ -81,7 +81,33 @@ def connect(path: str) -> sqlite3.Connection:
             CREATE TABLE IF NOT EXISTS work_days (
                 date TEXT PRIMARY KEY,
                 minutes INTEGER NOT NULL CHECK (minutes BETWEEN 1 AND 1440),
-                holiday INTEGER NOT NULL DEFAULT 0
+                holiday INTEGER NOT NULL DEFAULT 0,
+                code TEXT NULL,
+                start_min INTEGER NULL,
+                end_min INTEGER NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS shifts (
+                code TEXT PRIMARY KEY,
+                start_min INTEGER NOT NULL,
+                end_min INTEGER NOT NULL,
+                minutes INTEGER NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS roster_import (
+                work_month TEXT PRIMARY KEY,
+                message_id TEXT NOT NULL,
+                internal_date INTEGER NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS roster_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                synced_at TEXT NULL,
+                report TEXT NOT NULL DEFAULT ''
             )
         """)
         conn.execute("""
@@ -110,7 +136,8 @@ def connect(path: str) -> sqlite3.Connection:
                 refresh_token TEXT NOT NULL,
                 calendar_id TEXT NULL,
                 last_sync TEXT NULL,
-                last_error TEXT NULL
+                last_error TEXT NULL,
+                scopes TEXT NULL
             )
         """)
         conn.execute("""
@@ -124,7 +151,9 @@ def connect(path: str) -> sqlite3.Connection:
                 weekend_start INTEGER NOT NULL DEFAULT 510,
                 weekend_end INTEGER NOT NULL DEFAULT 990,
                 work_color TEXT NOT NULL DEFAULT '6',
-                holiday_color TEXT NOT NULL DEFAULT '2'
+                holiday_color TEXT NOT NULL DEFAULT '2',
+                roster_sender TEXT NOT NULL DEFAULT '',
+                roster_name TEXT NOT NULL DEFAULT ''
             )
         """)
         # Migrate databases made before these columns existed
@@ -145,6 +174,16 @@ def connect(path: str) -> sqlite3.Connection:
             "sunday_cap_minutes": "INTEGER NOT NULL DEFAULT 360",
             "per_day": "INTEGER NOT NULL DEFAULT 0",
         })
+        _add_missing_columns(conn, "google_sync", {"scopes": "TEXT NULL"})
+        _add_missing_columns(conn, "work_days", {
+            "code": "TEXT NULL",
+            "start_min": "INTEGER NULL",
+            "end_min": "INTEGER NULL",
+        })
+        _add_missing_columns(conn, "google_config", {
+            "roster_sender": "TEXT NOT NULL DEFAULT ''",
+            "roster_name": "TEXT NOT NULL DEFAULT ''",
+        })
         # Insert default settings if missing
         conn.execute("""
             INSERT OR IGNORE INTO settings (
@@ -155,6 +194,14 @@ def connect(path: str) -> sqlite3.Connection:
         conn.execute("""
             INSERT OR IGNORE INTO google_config (id) VALUES (1)
         """)
+        conn.executemany("""
+            INSERT OR IGNORE INTO shifts (code, start_min, end_min, minutes)
+            VALUES (?, ?, ?, ?)
+        """, [
+            ("V", 450, 930, 450),
+            ("D", 510, 990, 450),
+            ("L", 810, 1290, 450),
+        ])
     return conn
 
 
@@ -345,17 +392,29 @@ def delete_income(conn: sqlite3.Connection, pay_month: str) -> None:
 
 
 def list_days(conn: sqlite3.Connection, work_month: str) -> list[dict[str, Any]]:
-    """The worked days of a work month, oldest first: [{"date", "minutes", "holiday": bool}]."""
+    """The worked days of a work month, oldest first: [{"date", "minutes", "holiday", "code", "start", "end"}]."""
     _validate_month(work_month)
-    rows = conn.execute("SELECT date, minutes, holiday FROM work_days WHERE date LIKE ? ORDER BY date",
-                        (work_month + "-%",)).fetchall()
-    return [{"date": r["date"], "minutes": r["minutes"], "holiday": bool(r["holiday"])} for r in rows]
+    rows = conn.execute(
+        "SELECT date, minutes, holiday, code, start_min, end_min FROM work_days WHERE date LIKE ? ORDER BY date",
+        (work_month + "-%",)
+    ).fetchall()
+    return [
+        {
+            "date": r["date"],
+            "minutes": r["minutes"],
+            "holiday": bool(r["holiday"]),
+            "code": r["code"],
+            "start": r["start_min"],
+            "end": r["end_min"],
+        }
+        for r in rows
+    ]
 
 
 def save_month_days(conn: sqlite3.Connection, work_month: str, entries: list) -> Optional[dict[str, Any]]:
     """Replace all worked days of a work month (calendar mode) and switch the month to per-day estimates.
 
-    entries: [{"date": "YYYY-MM-DD", "minutes": 1..1440, "holiday": bool}]. Every date must lie inside work_month,
+    entries: [{"date": "YYYY-MM-DD", "minutes": 1..1440, "holiday": bool, ...}]. Every date must lie inside work_month,
     no date twice. Creates the income row (with a settings snapshot) when missing; with no entries and no
     income row nothing is created and None is returned. Derived columns days/sundays/minutes_override/
     holiday_minutes are kept in step so lists stay correct.
@@ -363,6 +422,15 @@ def save_month_days(conn: sqlite3.Connection, work_month: str, entries: list) ->
     pay_m = calc.pay_month(work_month)
     if not isinstance(entries, list):
         raise ValueError("days must be a list")
+
+    existing_days = {
+        r["date"]: dict(r)
+        for r in conn.execute(
+            "SELECT date, minutes, holiday, code, start_min, end_min FROM work_days WHERE date LIKE ?",
+            (work_month + "-%",)
+        ).fetchall()
+    }
+
     clean = []
     seen = set()
     for e in entries:
@@ -375,31 +443,181 @@ def save_month_days(conn: sqlite3.Connection, work_month: str, entries: list) ->
         if date_s in seen:
             raise ValueError(f"duplicate date {date_s}")
         seen.add(date_s)
-        minutes = e.get("minutes")
-        if not isinstance(minutes, int) or isinstance(minutes, bool) or not 1 <= minutes <= 1440:
-            raise ValueError(f"minutes must be an integer between 1 and 1440 ({date_s})")
+
         holiday = e.get("holiday", False)
         if not isinstance(holiday, bool):
             raise ValueError("holiday must be true or false")
-        clean.append((date_s, minutes, 1 if holiday else 0))
+
+        if "code" in e:
+            code_raw = e["code"]
+            if code_raw is None:
+                code_val = None
+                start_min = None
+                end_min = None
+                minutes = e.get("minutes")
+                if not isinstance(minutes, int) or isinstance(minutes, bool) or not (1 <= minutes <= 1440):
+                    raise ValueError(f"minutes must be an integer between 1 and 1440 ({date_s})")
+            else:
+                code_val = _validate_shift_code(code_raw)
+                has_start = "start" in e and e["start"] is not None
+                has_end = "end" in e and e["end"] is not None
+                if has_start != has_end:
+                    raise ValueError(f"Both start and end must be provided or neither ({date_s})")
+
+                if has_start and has_end:
+                    s_val = e["start"]
+                    e_val = e["end"]
+                    if isinstance(s_val, bool) or not isinstance(s_val, int) or isinstance(e_val, bool) or not isinstance(e_val, int):
+                        raise ValueError(f"start and end must be integers ({date_s})")
+                    if not (0 <= s_val < e_val <= 1440):
+                        raise ValueError(f"start and end must satisfy 0 <= start < end <= 1440 ({date_s})")
+                    start_min = s_val
+                    end_min = e_val
+                    shift_row = conn.execute(
+                        "SELECT minutes FROM shifts WHERE code = ?", (code_val,)
+                    ).fetchone()
+                else:
+                    shift_row = conn.execute(
+                        "SELECT start_min, end_min, minutes FROM shifts WHERE code = ?", (code_val,)
+                    ).fetchone()
+                    if shift_row is None:
+                        raise ValueError(f"Unknown shift code: {code_val!r} ({date_s})")
+                    start_min = shift_row["start_min"]
+                    end_min = shift_row["end_min"]
+
+                explicit_min = e.get("minutes")
+                if explicit_min is not None:
+                    if not isinstance(explicit_min, int) or isinstance(explicit_min, bool) or not (1 <= explicit_min <= 1440):
+                        raise ValueError(f"minutes must be an integer between 1 and 1440 ({date_s})")
+                    minutes = explicit_min
+                elif shift_row is not None:
+                    minutes = shift_row["minutes"]
+                else:
+                    minutes = end_min - start_min
+        else:
+            minutes = e.get("minutes")
+            if not isinstance(minutes, int) or isinstance(minutes, bool) or not (1 <= minutes <= 1440):
+                raise ValueError(f"minutes must be an integer between 1 and 1440 ({date_s})")
+
+            if not holiday and date_s in existing_days:
+                prev = existing_days[date_s]
+                if not bool(prev["holiday"]) and prev["minutes"] == minutes:
+                    code_val = prev["code"]
+                    start_min = prev["start_min"]
+                    end_min = prev["end_min"]
+                else:
+                    code_val = None
+                    start_min = None
+                    end_min = None
+            else:
+                code_val = None
+                start_min = None
+                end_min = None
+
+        if holiday:
+            code_val = None
+            start_min = None
+            end_min = None
+
+        clean.append((date_s, minutes, 1 if holiday else 0, code_val, start_min, end_min))
 
     existing = conn.execute("SELECT 1 FROM income WHERE pay_month = ?", (pay_m,)).fetchone()
     if existing is None and not clean:
         return None
-    total = sum(m for _, m, _ in clean)
-    holiday_minutes = sum(m for _, m, h in clean if h)
-    sundays = sum(1 for dt, _, _ in clean if date.fromisoformat(dt).weekday() == 6)
+    total = sum(m for _, m, _, _, _, _ in clean)
+    holiday_minutes = sum(m for _, m, h, _, _, _ in clean if h)
+    sundays = sum(1 for dt, _, _, _, _, _ in clean if date.fromisoformat(dt).weekday() == 6)
     if existing is None:
         save_income(conn, work_month, 0)  # creates the row with a settings snapshot
     with conn:
         conn.execute("DELETE FROM work_days WHERE date LIKE ?", (work_month + "-%",))
-        conn.executemany("INSERT INTO work_days (date, minutes, holiday) VALUES (?, ?, ?)", clean)
+        conn.executemany(
+            "INSERT INTO work_days (date, minutes, holiday, code, start_min, end_min) VALUES (?, ?, ?, ?, ?, ?)",
+            clean,
+        )
         conn.execute(
             "UPDATE income SET per_day = 1, days = ?, sundays = ?, minutes_override = ?, holiday_minutes = ?"
             " WHERE pay_month = ?",
             (len(clean), sundays, total, holiday_minutes, pay_m),
         )
     return get_income(conn, pay_m)
+
+
+def _validate_shift_code(code: Any) -> str:
+    if not isinstance(code, str):
+        raise ValueError(f"Shift code must be a string: {code!r}")
+    code = code.strip().upper()
+    if not (1 <= len(code) <= 8) or not code.isalnum() or not code.isascii():
+        raise ValueError(f"Invalid shift code: {code!r}")
+    return code
+
+
+def list_shifts(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """All shift templates, ordered by start time then code."""
+    rows = conn.execute(
+        "SELECT code, start_min, end_min, minutes FROM shifts ORDER BY start_min ASC, code ASC"
+    ).fetchall()
+    return [{"code": r["code"], "start": r["start_min"], "end": r["end_min"], "minutes": r["minutes"]} for r in rows]
+
+
+def save_shift(conn: sqlite3.Connection, code: str, start: int, end: int, minutes: int) -> dict[str, Any]:
+    """Upsert a shift template. Raises ValueError on invalid inputs."""
+    code_val = _validate_shift_code(code)
+    if isinstance(start, bool) or not isinstance(start, int) or isinstance(end, bool) or not isinstance(end, int):
+        raise ValueError("start and end must be integers")
+    if not (0 <= start < end <= 1440):
+        raise ValueError("start and end must satisfy 0 <= start < end <= 1440")
+    if isinstance(minutes, bool) or not isinstance(minutes, int) or not (1 <= minutes <= 1440):
+        raise ValueError("minutes must be an integer between 1 and 1440")
+    with conn:
+        conn.execute("""
+            INSERT INTO shifts (code, start_min, end_min, minutes)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(code) DO UPDATE SET
+                start_min = excluded.start_min,
+                end_min = excluded.end_min,
+                minutes = excluded.minutes
+        """, (code_val, start, end, minutes))
+    return {"code": code_val, "start": start, "end": end, "minutes": minutes}
+
+
+def delete_shift(conn: sqlite3.Connection, code: str) -> None:
+    """Delete a shift template by code. Work days keep their stored shift data."""
+    code_val = _validate_shift_code(code)
+    with conn:
+        conn.execute("DELETE FROM shifts WHERE code = ?", (code_val,))
+
+
+def get_roster_import(conn: sqlite3.Connection, work_month: str) -> Optional[dict[str, Any]]:
+    """Which roster mail was last applied to a work month: {"work_month","message_id","internal_date" (ms),"applied_at"} or None."""
+    _validate_month(work_month)
+    row = conn.execute("SELECT * FROM roster_import WHERE work_month = ?", (work_month,)).fetchone()
+    return dict(row) if row else None
+
+
+def set_roster_import(conn: sqlite3.Connection, work_month: str, message_id: str, internal_date: int,
+                      applied_at: str) -> None:
+    _validate_month(work_month)
+    with conn:
+        conn.execute(
+            "INSERT INTO roster_import (work_month, message_id, internal_date, applied_at) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(work_month) DO UPDATE SET message_id = excluded.message_id,"
+            " internal_date = excluded.internal_date, applied_at = excluded.applied_at",
+            (work_month, str(message_id), int(internal_date), str(applied_at)))
+
+
+def get_roster_state(conn: sqlite3.Connection) -> dict[str, Any]:
+    """The last roster sync: {"synced_at": str|None, "report": str (JSON text, '' when never synced)}."""
+    row = conn.execute("SELECT synced_at, report FROM roster_state WHERE id = 1").fetchone()
+    return {"synced_at": row["synced_at"], "report": row["report"]} if row else {"synced_at": None, "report": ""}
+
+
+def set_roster_state(conn: sqlite3.Connection, synced_at: str, report: str) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO roster_state (id, synced_at, report) VALUES (1, ?, ?)"
+            " ON CONFLICT(id) DO UPDATE SET synced_at = excluded.synced_at, report = excluded.report",
+            (synced_at, report))
 
 
 def refresh_snapshot(conn: sqlite3.Connection, pay_month: str) -> dict[str, Any]:
@@ -596,15 +814,16 @@ def get_google(conn: sqlite3.Connection) -> Optional[dict[str, Any]]:
     return dict(row) if row else None
 
 
-def connect_google(conn: sqlite3.Connection, refresh_token: str) -> None:
-    """Store a new refresh token; keeps an existing calendar id, clears the error."""
+def connect_google(conn: sqlite3.Connection, refresh_token: str, scopes: Optional[str] = None) -> None:
+    """Store a new refresh token and the granted scopes (space separated, None = unknown); keeps an existing calendar id, clears the error."""
     if not isinstance(refresh_token, str) or not refresh_token:
         raise ValueError("refresh_token must be a non-empty string")
     with conn:
         conn.execute("""
-            INSERT INTO google_sync (id, refresh_token) VALUES (1, ?)
-            ON CONFLICT(id) DO UPDATE SET refresh_token = excluded.refresh_token, last_error = NULL
-        """, (refresh_token,))
+            INSERT INTO google_sync (id, refresh_token, scopes) VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET refresh_token = excluded.refresh_token, scopes = excluded.scopes,
+                last_error = NULL
+        """, (refresh_token, scopes))
 
 
 def update_google(conn: sqlite3.Connection, **fields) -> None:
@@ -639,6 +858,7 @@ def update_google_config(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
         "weekday_start", "weekday_end",
         "weekend_start", "weekend_end",
         "work_color", "holiday_color",
+        "roster_sender", "roster_name",
     }
     for k in fields:
         if k not in allowed_fields:
@@ -647,7 +867,7 @@ def update_google_config(conn: sqlite3.Connection, **fields) -> dict[str, Any]:
     current = get_google_config(conn)
     merged = {**current, **fields}
 
-    for str_field in ("client_id", "client_secret", "redirect_uri"):
+    for str_field in ("client_id", "client_secret", "redirect_uri", "roster_sender", "roster_name"):
         val = merged[str_field]
         if not isinstance(val, str):
             raise ValueError(f"{str_field} must be a string")

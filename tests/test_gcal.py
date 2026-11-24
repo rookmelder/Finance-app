@@ -84,7 +84,8 @@ class TestGcalModule(unittest.TestCase):
         self.assertEqual(q["state"], ["st8"])
         self.assertEqual(q["access_type"], ["offline"])
         self.assertEqual(q["prompt"], ["consent"])
-        self.assertEqual(q["scope"], ["https://www.googleapis.com/auth/calendar.app.created"])
+        self.assertEqual(q["scope"], ["https://www.googleapis.com/auth/calendar.app.created "
+                                      "https://www.googleapis.com/auth/gmail.readonly"])
         self.assertEqual(q["redirect_uri"], ["https://x/cb"])
 
     def test_event_body_weekday_work_day(self):

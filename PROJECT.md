@@ -21,7 +21,7 @@ private: yes
 ```
 
 ## Worker notes (pasted into every worker's task: keep it short)
-- Python 3, Flask and the standard library only (sqlite3, unittest). No other packages, no Node, no network in tests.
+- Python 3, Flask and the standard library only (sqlite3, unittest). The ONLY exception: pypdf, imported only in src/roster_pdf.py (the Lead writes it); never import it anywhere else or in tests. No Node, no network in tests.
 - Money is always integer cents; convert to euros only when displaying. Never floats for money.
 - Dates: ISO strings; a "month" is `YYYY-MM` and means the month the pay is RECEIVED (hours worked in the previous month).
 - Return errors, never print. Server-rendered HTML (Jinja templates) with simple CSS, mobile first, English text.

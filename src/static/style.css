@@ -1321,6 +1321,43 @@ body.login button[type="submit"] { width: 100%; margin-top: 4px; }
   flex-shrink: 0;
 }
 
+/* Shifts table in Settings */
+.shifts-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 10px 0 14px;
+}
+.shifts-table th,
+.shifts-table td {
+  padding: 8px 6px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.shifts-table th {
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.shifts-table input[type="text"] {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 0.88rem;
+}
+.shifts-table .shift-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+}
+.shift-add-row td {
+  border-bottom: none;
+  background: color-mix(in srgb, var(--surface-2) 50%, var(--surface));
+}
+
 /* Save status toast */
 .cal-status {
   position: fixed;

@@ -27,6 +27,9 @@
       state.entries.set(e.date, {
         minutes: Number(e.minutes),
         holiday: Boolean(e.holiday),
+        code: e.code == null ? null : e.code,
+        start: e.start == null ? null : e.start,
+        end: e.end == null ? null : e.end,
       });
     }
   }
@@ -71,6 +74,14 @@
     const num = Number(clean);
     if (isNaN(num) || num < 0.25 || num > 24) return null;
     return Math.round(num * 60);
+  }
+
+  function formatTime(minutes) {
+    return Math.floor(minutes / 60) + ":" + String(minutes % 60).padStart(2, "0");
+  }
+
+  function shiftTimes(shift) {
+    return formatTime(shift.start) + "-" + formatTime(shift.end);
   }
 
   // --- Summary Rendering ---
@@ -202,6 +213,9 @@
         date: date,
         minutes: info.minutes,
         holiday: info.holiday,
+        code: info.code,
+        start: info.shiftTimesPending ? undefined : info.start,
+        end: info.shiftTimesPending ? undefined : info.end,
       });
     }
     daysList.sort((a, b) => a.date.localeCompare(b.date));
@@ -257,18 +271,23 @@
 
     if (tool.type === "erase") {
       state.entries.delete(dateStr);
-    } else if (tool.type === "preset") {
+    } else if (tool.type === "preset" || tool.type === "shift") {
       // a tapped preset carries {preset: {...}}; a dropped one carries the fields itself
-      const p = tool.preset || tool;
+      const p = tool.shift || tool.preset || tool;
       const minutes = Number(p.minutes);
       if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
         setStatus("That preset has invalid hours.");
         return;
       }
       const isHol = Boolean(p.holiday || (cal.holidays && dateStr in cal.holidays));
+      const isShift = tool.type === "shift" && !isHol;
       state.entries.set(dateStr, {
         minutes: minutes,
         holiday: isHol,
+        code: isShift ? p.code : null,
+        start: isShift ? p.start : null,
+        end: isShift ? p.end : null,
+        shiftTimesPending: isShift,
       });
     } else if (tool.type === "custom") {
       const minutes = Number(tool.minutes);
@@ -280,6 +299,9 @@
       state.entries.set(dateStr, {
         minutes: minutes,
         holiday: isHol,
+        code: null,
+        start: null,
+        end: null,
       });
     }
 
@@ -318,6 +340,8 @@
       if (state.activeTool) {
         if (toolType === "preset" && state.activeTool.type === "preset") {
           isActive = state.activeTool.preset.id === btn.getAttribute("data-preset-id");
+        } else if (toolType === "shift" && state.activeTool.type === "shift") {
+          isActive = state.activeTool.id === btn.getAttribute("data-shift-id");
         } else if (toolType === "custom" && state.activeTool.type === "custom") {
           isActive = true;
         } else if (toolType === "erase" && state.activeTool.type === "erase") {
@@ -365,6 +389,30 @@
           );
         });
 
+        presetsContainer.appendChild(btn);
+      }
+    }
+
+    if (Array.isArray(cal.shifts)) {
+      for (const shift of cal.shifts) {
+        const tool = { type: "shift", id: "shift:" + shift.code, shift: shift };
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "preset-btn";
+        btn.setAttribute("data-tool-type", "shift");
+        btn.setAttribute("data-shift-id", tool.id);
+        btn.setAttribute("aria-pressed", "false");
+        btn.draggable = true;
+        btn.title = shift.code + " (" + shiftTimes(shift) + ")";
+        btn.appendChild(chipParts(shift.code, shiftTimes(shift)));
+        btn.addEventListener("click", () => {
+          const same = state.activeTool && state.activeTool.id === tool.id;
+          state.activeTool = same ? null : tool;
+          updatePresetsBarActiveStates();
+        });
+        btn.addEventListener("dragstart", (e) => {
+          e.dataTransfer.setData("text/plain", JSON.stringify({ tool: tool }));
+        });
         presetsContainer.appendChild(btn);
       }
     }
@@ -555,7 +603,7 @@
       if (isWorked) {
         cell.classList.add("is-worked");
         if (entry.holiday) cell.classList.add("is-holiday-entry");
-        cell.setAttribute("aria-label", dateStr + ": " + formatHours(entry.minutes) + " hours" + (entry.holiday ? ", holiday" : ""));
+        cell.setAttribute("aria-label", dateStr + ": " + formatHours(entry.minutes) + " hours" + (entry.code ? ", shift " + entry.code : "") + (entry.holiday ? ", holiday" : ""));
       } else {
         cell.setAttribute("aria-label", dateStr + (holidayName ? ": " + holidayName : ""));
       }
@@ -580,9 +628,9 @@
       if (isWorked) {
         const chip = makeChip(
           entry.holiday ? "cal-chip-holiday" : "cal-chip-work",
-          formatHours(entry.minutes) + "h",
-          entry.holiday ? "Holiday" : "Work",
-          formatHours(entry.minutes) + " h" + (entry.holiday ? " (holiday)" : "")
+          entry.code || formatHours(entry.minutes) + "h",
+          entry.code ? shiftTimes(entry) : (entry.holiday ? "Holiday" : "Work"),
+          entry.code ? entry.code + " " + shiftTimes(entry) : formatHours(entry.minutes) + " h" + (entry.holiday ? " (holiday)" : "")
         );
         const clearBtn = document.createElement("button");
         clearBtn.type = "button";
@@ -722,6 +770,31 @@
     holLabel.appendChild(document.createTextNode(" Holiday (paid double)"));
     form.appendChild(holLabel);
 
+    const shiftLabel = el("label", "day-editor-field", "Shift");
+    const shiftSelect = el("select");
+    const shifts = Array.isArray(cal.shifts) ? cal.shifts.slice() : [];
+    if (entry && entry.code && !shifts.some((shift) => shift.code === entry.code)) {
+      shifts.push({ code: entry.code, start: entry.start, end: entry.end, minutes: entry.minutes });
+    }
+    const noneOption = el("option", "", "None");
+    noneOption.value = "";
+    shiftSelect.appendChild(noneOption);
+    for (const shift of shifts) {
+      const option = el("option", "", shift.code + " (" + shiftTimes(shift) + ")");
+      option.value = shift.code;
+      shiftSelect.appendChild(option);
+    }
+    shiftSelect.value = entry && entry.code ? entry.code : "";
+    shiftSelect.addEventListener("change", () => {
+      const shift = shifts.find((item) => item.code === shiftSelect.value);
+      if (shift) {
+        hoursInput.value = formatHours(shift.minutes);
+        holInput.checked = false;
+      }
+    });
+    shiftLabel.appendChild(shiftSelect);
+    form.appendChild(shiftLabel);
+
     const error = el("p", "day-editor-error");
     error.hidden = true;
     form.appendChild(error);
@@ -752,7 +825,17 @@
         hoursInput.focus();
         return;
       }
-      state.entries.set(dateStr, { minutes: mins, holiday: holInput.checked });
+      const shift = shifts.find((item) => item.code === shiftSelect.value);
+      const keepTimes = shift && entry && entry.code === shift.code &&
+        entry.minutes === mins && entry.holiday === holInput.checked;
+      state.entries.set(dateStr, {
+        minutes: mins,
+        holiday: holInput.checked,
+        code: shift ? shift.code : null,
+        start: shift ? (keepTimes ? entry.start : shift.start) : null,
+        end: shift ? (keepTimes ? entry.end : shift.end) : null,
+        shiftTimesPending: Boolean(shift && (!keepTimes || entry.shiftTimesPending)),
+      });
       dlg.close();
       renderCalendarGrid();
       scheduleSave();

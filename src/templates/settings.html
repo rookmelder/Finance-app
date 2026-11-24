@@ -79,6 +79,77 @@
   <button type="submit">Save settings</button>
 </form>
 
+<section class="card" id="shifts">
+  <div class="card-head">
+    <h2>Shifts</h2>
+  </div>
+  <table class="shifts-table">
+    <thead>
+      <tr>
+        <th>Code</th>
+        <th>Start</th>
+        <th>End</th>
+        <th>Hours</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in shifts %}
+      <tr>
+        <td>
+          <form id="shift-save-{{ s.code }}" method="post" action="{{ url_for('shifts_save') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          </form>
+          <input form="shift-save-{{ s.code }}" type="text" name="code" value="{{ s.code }}" required>
+        </td>
+        <td>
+          <input form="shift-save-{{ s.code }}" type="text" name="start" value="{{ s.start | hhmm }}" required>
+        </td>
+        <td>
+          <input form="shift-save-{{ s.code }}" type="text" name="end" value="{{ s.end | hhmm }}" required>
+        </td>
+        <td>
+          <input form="shift-save-{{ s.code }}" type="text" name="hours" value="{{ s.minutes | hours }}" required>
+        </td>
+        <td>
+          <div class="shift-actions">
+            <button form="shift-save-{{ s.code }}" type="submit" class="btn-sm">Save</button>
+            <form method="post" action="{{ url_for('shifts_delete') }}" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="code" value="{{ s.code }}">
+              <button type="submit" class="btn-secondary btn-sm">Delete</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+      <tr class="shift-add-row">
+        <td>
+          <form id="shift-add-form" method="post" action="{{ url_for('shifts_save') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          </form>
+          <input form="shift-add-form" type="text" name="code" placeholder="Code" required>
+        </td>
+        <td>
+          <input form="shift-add-form" type="text" name="start" placeholder="07:30" required>
+        </td>
+        <td>
+          <input form="shift-add-form" type="text" name="end" placeholder="15:30" required>
+        </td>
+        <td>
+          <input form="shift-add-form" type="text" name="hours" placeholder="7.5" required>
+        </td>
+        <td>
+          <div class="shift-actions">
+            <button form="shift-add-form" type="submit" class="btn-sm">Add shift</button>
+          </div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="help-text">Imported rosters add their shifts here automatically. Hours are what you are paid (after the unpaid break).</p>
+</section>
+
 {% if google %}
 <section class="card google-card" id="google">
   <div class="card-head">
@@ -142,8 +213,8 @@
   </form>
   {% endif %}
   <ol class="help-text" style="padding-left: 20px; margin-top: 14px;">
-    <li>console.cloud.google.com: create a project and enable the Google Calendar API.</li>
-    <li>OAuth consent screen: External, add yourself as test user, then Publish app (otherwise access stops after 7 days).</li>
+    <li>console.cloud.google.com: create a project and enable the Google Calendar API and the Gmail API.</li>
+    <li>OAuth consent screen: External, add the scopes calendar.app.created and gmail.readonly, add yourself as test user, then Publish app (otherwise access stops after 7 days).</li>
     <li>Credentials: OAuth client ID, type Web application, add the redirect URI above.</li>
     <li>Paste the client id and secret here, save, then Connect.</li>
   </ol>
@@ -194,9 +265,54 @@
         </span>
       </label>
     </div>
-    <p class="help-text">Work days become events at these hours (Monday–Friday / Saturday–Sunday). Holidays stay all-day. The hours in the title are the hours you logged.</p>
+    <p class="help-text">Work days become events at these hours (Monday–Friday / Saturday–Sunday). Holidays stay all-day. Days with a shift get that shift's own times and the title "Work V" / "Work D" / "Work L"; other days show the hours you logged.</p>
     <button type="submit">Save event settings</button>
   </form>
 </section>
+
+{% if google.connected %}
+<section class="card" id="roster">
+  <div class="card-head">
+    <h2>Roster from email</h2>
+    {% if google.gmail_ok %}<span class="badge badge-active">Gmail allowed</span>{% endif %}
+  </div>
+  <p class="help-text">Press the button to read your mail, find the newest roster PDF per month, and update your worked days and shifts (and the Google calendar) if they changed. Only PDFs from the sender below are read, nothing is deleted or sent, and finished months are left alone.</p>
+  {% if not google.gmail_ok %}
+  <p class="error">Gmail access was not granted yet. Disconnect Google, connect again and tick the Gmail box.</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('roster_settings') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-grid">
+      <label>Sender's email address
+        <input type="email" name="sender" value="{{ google.roster.sender }}" placeholder="name@example.com" maxlength="254">
+      </label>
+      <label>Your name in the roster
+        <input type="text" name="name" value="{{ google.roster.name }}" placeholder="First Last" maxlength="80">
+      </label>
+    </div>
+    <button type="submit">Save</button>
+  </form>
+  <form method="post" action="{{ url_for('roster_sync_now') }}" style="margin-top: 14px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" {% if not google.gmail_ok or not google.roster.sender or not google.roster.name %}disabled{% endif %}>Sync roster now</button>
+  </form>
+  {% set rep = google.roster.report %}
+  {% if rep %}
+  <h3>Last sync{% if google.roster.synced_at %}: {{ google.roster.synced_at.replace('T', ' ') }}{% endif %}</h3>
+  <p class="{{ 'notice' if rep.ok else 'error' }}">{{ rep.message }}</p>
+  {% if rep.gcal == 'error' %}<p class="error">The days were saved, but updating Google Calendar failed. Use "Sync all months now" above to retry.</p>{% endif %}
+  {% if rep.months %}
+  <ul class="help-text">
+    {% for m in rep.months %}<li>{{ m.work_month | month_label }}: {{ m.status }} ({{ m.detail }})</li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if rep.ignored %}<p class="help-text">{{ rep.ignored }} PDF{{ '' if rep.ignored == 1 else 's' }} from that sender did not look like a roster and {{ 'was' if rep.ignored == 1 else 'were' }} ignored.</p>{% endif %}
+  {% if rep.errors %}
+  <p class="error">Some mails could not be read, so a newer roster may be missing:</p>
+  <ul class="error">{% for e in rep.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% endif %}
+</section>
+{% endif %}
 {% endif %}
 {% endblock %}

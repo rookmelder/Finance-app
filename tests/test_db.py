@@ -316,7 +316,8 @@ class CalendarDbTests(unittest.TestCase):
         row = db.save_month_days(self.conn, "2026-10", days)
         self.assertEqual(row["pay_month"], "2026-11")
         self.assertEqual((row["per_day"], row["days"], row["sundays"], row["minutes_override"]), (1, 2, 1, 900))
-        self.assertEqual(db.list_days(self.conn, "2026-10"), days)
+        expected = [{**d, "code": None, "start": None, "end": None} for d in days]
+        self.assertEqual(db.list_days(self.conn, "2026-10"), expected)
         self.assertEqual(row["rate_cents"], 1597)
 
     def test_replace_and_clear(self):

@@ -9,7 +9,7 @@ Stores application settings, monthly income records, calendar-mode work days, re
 Handles schema migrations on startup and enforces data integrity across all models.
 
 ## Files
-- `src/db.py`: schema definitions, migration helper (`_add_missing_columns`), connection factory (`connect`), and query functions for `settings`, `income`, `work_days`, `recurring`, `expenses`, `google_sync` and `google_config`.
+- `src/db.py`: schema definitions, migration helper (`_add_missing_columns`), connection factory (`connect`), and query functions for `settings`, `income`, `work_days`, `recurring`, `expenses`, `google_sync`, `google_config`, `shifts`, `roster_import` and `roster_state`.
 - `tests/test_db.py`: its tests (covers schema creation, column migrations, settings validation, income snapshots, calendar days, recurring costs, expenses, and SQL injection safety).
 
 ## How it connects
@@ -24,6 +24,8 @@ Handles schema migrations on startup and enforces data integrity across all mode
 - Single-row tables: `settings`, `google_sync` and `google_config` enforce `CHECK (id = 1)` to guarantee exactly one active configuration row.
 - Calendar mode: `save_month_days` atomically replaces `work_days` for a month and synchronizes derived totals (`days`, `sundays`, `minutes_override`, `holiday_minutes`) into `income` with `per_day = 1`.
 - Derived Sunday premium: `sunday_premium_cents` in `settings` is derived from `sunday_cents_per_hour` and `sunday_cap_minutes` rather than edited directly.
+- Shifts: table `shifts` (code, start, end, paid minutes; V, D, L seeded) and per-day nullable `work_days.code/start_min/end_min`. `save_month_days` fills times from `shifts` when only a code is given, keeps a stored shift when the entry has no "code" key and the same minutes, and clears it with `"code": null` or for holidays. See [Roster import](system-roster-import.md).
+- Roster state: `roster_import` (the mail applied last per work month), `roster_state` (last report JSON), `google_config.roster_sender/roster_name`, `google_sync.scopes` (granted Google scopes).
 - Cascading deletes: `delete_income` explicitly deletes associated `work_days` for the month before removing the `income` row.
 
 ## Known issues

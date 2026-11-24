@@ -15,6 +15,9 @@ Autosaves work entries to the server via debounced JSON requests and updates pay
 - `tests/test_calendar_api.py`: its tests (covers `calendar_save` endpoint, CSRF verification, input validation, and income record creation; Google sync is tested in `tests/test_gcal.py`).
 - `tests/test_calendar_page.py`: its tests (covers `calendar_home`, `calendar_page`, JSON data embedding in `#cal-data`, authentication requirements, and static asset verification).
 
+## Shifts
+The tool bar has one chip per shift (code and times, from `cal.shifts`); painting one sends `{"minutes": shift minutes, "holiday": false, "code": "V"}` and the server fills the times. Untouched days send back their loaded `code/start/end`; plain/custom/holiday days send `"code": null`. Shift days show the code and times in the cell; the day editor has a Shift select. Shift times are edited in Settings ("Shifts"). See [Roster import](system-roster-import.md).
+
 ## How it connects
 - Uses: [Web Application](system-web-app.md) (route endpoints `calendar_home`, `calendar_page`, `calendar_save`, `_estimate`, `_breakdown_rows`), [Database](system-database.md) (`db.list_days`, `db.save_month_days`, `db.get_income`, `db.get_settings`), [Pay and Budget Calculations](system-pay-calc.md) (`calc.pay_month`, `calc.belgian_holidays`, `calc.estimate_from_days`, `calc.format_money`, `calc.add_months`), [Authentication and Configuration](system-auth-config.md) (session authentication and `X-CSRF-Token` validation), and [Google Calendar sync](system-google-calendar.md) (`_gcal_sync`).
 - Used by: [Web Application](system-web-app.md) (linked from the Calendar tab via `/calendar`, the months view `/income`, and the income editor `/income/<pay_month>`); end users in web browsers.
