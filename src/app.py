@@ -516,6 +516,7 @@ def _render_expenses(conn, month=None, error=None, status_code=200):
         render_template(
             "expenses.html",
             expenses=expenses,
+            quick=db.list_quick_expenses(conn),
             month=month,
             today=today_iso,
             error=error,
@@ -891,6 +892,30 @@ def create_app(cfg: dict) -> Flask:
                         bucket=bucket,
                         note=note,
                     )
+                elif action == "quick_save":
+                    db.add_quick_expense(
+                        conn,
+                        label=request.form.get("label", ""),
+                        amount_cents=calc.parse_money(request.form.get("amount", "")),
+                        bucket=request.form.get("bucket", "").strip(),
+                    )
+                elif action in ("quick_add", "quick_delete"):
+                    id_str = request.form.get("id", "").strip()
+                    try:
+                        quick_id = int(id_str)
+                    except (ValueError, TypeError):
+                        raise ValueError(f"Invalid id: {id_str!r}")
+                    if action == "quick_delete":
+                        db.delete_quick_expense(conn, quick_id)
+                    else:
+                        q = db.get_quick_expense(conn, quick_id)
+                        db.add_expense(
+                            conn,
+                            date_str=datetime.date.today().isoformat(),
+                            amount_cents=q["amount_cents"],
+                            bucket=q["bucket"],
+                            note=q["label"],
+                        )
                 elif action == "delete":
                     id_str = request.form.get("id", "").strip()
                     try:

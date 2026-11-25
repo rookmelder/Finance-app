@@ -11,6 +11,56 @@
 {% if error %}<p class="error">{{ error }}</p>{% endif %}
 
 <section class="card">
+  <h2>Quick add</h2>
+  <p class="help-text">One tap logs the expense for today, e.g. your usual lunch.</p>
+  <div class="presets">
+    {% for q in quick %}
+    <form method="post" action="{{ url_for('expenses') }}" class="inline-form quick-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="quick_add">
+      <input type="hidden" name="id" value="{{ q.id }}">
+      {% if month %}<input type="hidden" name="month_filter" value="{{ month }}">{% endif %}
+      <button type="submit" class="preset-btn" title="Add {{ q.label }} for today ({{ q.bucket }})"><span class="chip-swatch"></span><span>{{ q.label }}</span><span class="chip-meta">{{ q.amount_cents | money }}</span></button>
+    </form>
+    {% endfor %}
+  </div>
+  <details class="quick-manage">
+    <summary>{% if quick %}Edit quick adds{% else %}Create a quick add{% endif %}</summary>
+    {% for q in quick %}
+    <form method="post" action="{{ url_for('expenses') }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="quick_delete">
+      <input type="hidden" name="id" value="{{ q.id }}">
+      {% if month %}<input type="hidden" name="month_filter" value="{{ month }}">{% endif %}
+      {{ q.label }} · {{ q.amount_cents | money }} · {{ q.bucket }}
+      <button type="submit" class="btn-ghost danger btn-sm" aria-label="Delete quick add {{ q.label }}">✕</button>
+    </form>
+    {% endfor %}
+    <form method="post" action="{{ url_for('expenses') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="action" value="quick_save">
+      {% if month %}<input type="hidden" name="month_filter" value="{{ month }}">{% endif %}
+      <div class="form-grid">
+        <label>Name
+          <input type="text" name="label" required maxlength="40" placeholder="Lunch">
+        </label>
+        <label>Amount
+          <span class="field"><input type="text" name="amount" required placeholder="7.50" inputmode="decimal"><span class="unit">€</span></span>
+        </label>
+        <label>Bucket
+          <select name="bucket" required>
+            <option value="needs">Needs</option>
+            <option value="free" selected>Free spend</option>
+            <option value="savings">Savings</option>
+          </select>
+        </label>
+      </div>
+      <button type="submit">Save quick add</button>
+    </form>
+  </details>
+</section>
+
+<section class="card">
   <h2>Log expense</h2>
   <form method="post" action="{{ url_for('expenses') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

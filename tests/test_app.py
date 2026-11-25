@@ -253,6 +253,36 @@ class TestApp(unittest.TestCase):
         self.assertEqual(costs_resp.status_code, 200)
         self.assertIn("€10.00 per month", costs_resp.text)
 
+    def test_quick_add_expense_flow(self):
+        """Create a quick add, press it twice (two expenses dated today), delete it; bad input is rejected."""
+        import datetime
+        self.login()
+        post = lambda **d: self.client.post("/expenses", data={"csrf_token": self.get_csrf(), **d})
+        self.assertEqual(post(action="quick_save", label="Lunch", amount="7,50", bucket="needs").status_code, 303)
+        page = self.client.get("/expenses").text
+        self.assertIn("Lunch", page)
+        self.assertIn("€7.50", page)
+
+        conn = db.connect(self.cfg["DB_PATH"])
+        quick = db.list_quick_expenses(conn)
+        self.assertEqual(len(quick), 1)
+        qid = str(quick[0]["id"])
+        self.assertEqual(post(action="quick_add", id=qid).status_code, 303)
+        self.assertEqual(post(action="quick_add", id=qid).status_code, 303)
+        exps = db.list_expenses(conn)
+        self.assertEqual(len(exps), 2)
+        for e in exps:
+            self.assertEqual((e["date"], e["amount_cents"], e["bucket"], e["note"]),
+                             (datetime.date.today().isoformat(), 750, "needs", "Lunch"))
+
+        self.assertEqual(post(action="quick_save", label="", amount="5", bucket="free").status_code, 400)
+        self.assertEqual(post(action="quick_save", label="X", amount="0", bucket="free").status_code, 400)
+        self.assertEqual(post(action="quick_add", id="999").status_code, 400)
+        self.assertEqual(post(action="quick_delete", id=qid).status_code, 303)
+        self.assertEqual(db.list_quick_expenses(conn), [])
+        self.assertEqual(len(db.list_expenses(conn)), 2)  # logged expenses stay
+        conn.close()
+
     def test_expense_add_and_delete(self):
         """Expense add + delete."""
         self.login()

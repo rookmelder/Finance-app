@@ -163,6 +163,14 @@ def connect(path: str) -> sqlite3.Connection:
             )
         """)
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS quick_expenses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT NOT NULL,
+                amount_cents INTEGER NOT NULL,
+                bucket TEXT NOT NULL CHECK (bucket IN ('needs', 'free', 'savings'))
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS google_sync (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 refresh_token TEXT NOT NULL,
@@ -899,6 +907,41 @@ def list_expenses(conn: sqlite3.Connection, month: Optional[str] = None) -> list
     else:
         rows = conn.execute("SELECT * FROM expenses ORDER BY date DESC, id DESC").fetchall()
     return [dict(r) for r in rows]
+
+
+# --- Quick-add expenses (one-tap presets for repeat purchases) ---
+
+def list_quick_expenses(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [dict(r) for r in conn.execute("SELECT * FROM quick_expenses ORDER BY id").fetchall()]
+
+
+def get_quick_expense(conn: sqlite3.Connection, quick_id: int) -> dict[str, Any]:
+    row = conn.execute("SELECT * FROM quick_expenses WHERE id = ?", (quick_id,)).fetchone()
+    if row is None:
+        raise ValueError(f"Quick expense with id {quick_id} not found")
+    return dict(row)
+
+
+def add_quick_expense(conn: sqlite3.Connection, label: str, amount_cents: int, bucket: str) -> dict[str, Any]:
+    label = label.strip() if isinstance(label, str) else ""
+    if not label or len(label) > 40:
+        raise ValueError("Quick add needs a name of 1 to 40 characters")
+    if not isinstance(amount_cents, int) or isinstance(amount_cents, bool) or amount_cents <= 0:
+        raise ValueError("amount_cents must be integer > 0")
+    if bucket not in ("needs", "free", "savings"):
+        raise ValueError(f"bucket must be one of 'needs', 'free', 'savings'; got {bucket!r}")
+    with conn:
+        cur = conn.execute(
+            "INSERT INTO quick_expenses (label, amount_cents, bucket) VALUES (?, ?, ?)",
+            (label, amount_cents, bucket),
+        )
+    return get_quick_expense(conn, cur.lastrowid)
+
+
+def delete_quick_expense(conn: sqlite3.Connection, quick_id: int) -> None:
+    get_quick_expense(conn, quick_id)
+    with conn:
+        conn.execute("DELETE FROM quick_expenses WHERE id = ?", (quick_id,))
 
 
 def spent_by_month(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
