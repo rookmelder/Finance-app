@@ -15,6 +15,9 @@ Autosaves work entries to the server via debounced JSON requests and updates pay
 - `tests/test_calendar_api.py`: its tests (covers `calendar_save` endpoint, CSRF verification, input validation, and income record creation; Google sync is tested in `tests/test_gcal.py`).
 - `tests/test_calendar_page.py`: its tests (covers `calendar_home`, `calendar_page`, JSON data embedding in `#cal-data`, authentication requirements, and static asset verification).
 
+## Tools bar
+The tools bar sits in a collapsible block (`#tools-toggle` button, `#tools-body`): closed by default, the open state is kept in `localStorage` (`calToolsOpen`), and the button shows the picked tool ("none picked", the preset label, shift code, hours or "Erase") so painting works with the bar closed. Drag and drop from the chips needs it open.
+
 ## Shifts
 The tool bar has one chip per shift (code and times, from `cal.shifts`); painting one sends `{"minutes": shift minutes, "holiday": false, "code": "V"}` and the server fills the times. Untouched days send back their loaded `code/start/end`; plain/custom/holiday days send `"code": null`. Shift days show the code and times in the cell; the day editor has a Shift select. Shift times are edited in Settings ("Shifts"). See [Roster import](system-roster-import.md).
 

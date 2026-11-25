@@ -28,6 +28,7 @@ The boss emails a one-page PDF roster ("Rooster Technische Dienst") for the whol
 - Pay uses the cell's hours (7.5 h = 450 min); the shift times (8:30-16:30) include the unpaid half hour break.
 - Per month the newest mail wins; months before the current month are never touched; a month is not overwritten by an older mail than the one applied before; if a newer roster mail could not be read the months older than it are left unchanged.
 - Manual holiday days on dates the roster does not use are kept; every other stored day of the month is replaced by the roster.
+- A rostered day that is a Belgian public holiday (`calc.belgian_holidays`) or was already stored as a holiday is imported as a holiday (paid double), like one set by hand: the shift code and times are dropped, because holiday days store none. The unchanged check compares the holiday flag too.
 - Cache: per Gmail message id (and sender + name) the outcome is stored in `roster_mail`: not from the sender / no PDF, not a roster, or the parsed rows of the user. The PDF itself is never stored (it holds colleagues' names). A cached mail needs no Gmail download, so a repeat sync only lists mail. Mails that failed to parse or have several PDFs are not cached.
 - Per-month sync: the search uses `after:` (month start minus 90 days), only that month is applied, and the "month already over" rule is off because the user asked for that month.
 - Unknown legend shifts are added to the shifts table (never overwriting an edited one) so they can be picked on the calendar page.

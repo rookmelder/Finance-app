@@ -9,7 +9,7 @@ Stores application settings, monthly income records, calendar-mode work days, re
 Handles schema migrations on startup and enforces data integrity across all models.
 
 ## Files
-- `src/db.py`: schema definitions, migration helper (`_add_missing_columns`), connection factory (`connect`), and query functions for `settings`, `income`, `work_days`, `recurring`, `expenses`, `google_sync`, `google_config`, `shifts`, `roster_import` and `roster_state`.
+- `src/db.py`: schema definitions, migration helper (`_add_missing_columns`), connection factory (`connect`), and query functions for `settings`, `income`, `work_days`, `recurring`, `expenses`, `quick_expenses` (one-tap expense presets: label, amount_cents, bucket), `google_sync`, `google_config`, `shifts`, `roster_import` and `roster_state`.
 - `tests/test_db.py`: its tests (covers schema creation, column migrations, settings validation, income snapshots, calendar days, recurring costs, expenses, and SQL injection safety).
 
 ## How it connects

@@ -15,7 +15,7 @@ Coordinates database access, pay calculation breakdowns, budget chaining, and Go
 - `src/templates/income.html`: months view displaying multi-year calendar grid of worked months and collapsible form to add income by totals.
 - `src/templates/income_edit.html`: single pay-month income view to view pay breakdown, enter or clear actual received pay, refresh snapshot rates to current settings, or delete income.
 - `src/templates/costs.html`: "Monthly costs" recurring bills and subscriptions list with monthly set-aside totals, active toggles, and add/edit/delete forms.
-- `src/templates/expenses.html`: discretionary expense log with month filtering, bucket assignment (`needs`, `free`, `savings`), and deletion.
+- `src/templates/expenses.html`: discretionary expense log with month filtering, bucket assignment (`needs`, `free`, `savings`), and deletion; a "Quick add" card on top holds saved presets (name, amount, bucket): one button press logs the preset as an expense dated today (POST `/expenses` actions `quick_save`, `quick_add`, `quick_delete`).
 - `src/templates/settings.html`: settings page configuring wage rates, standard work hours, daily allowances, RSZ percentage, budget splits, carry-over toggle, and Google Calendar connection status.
 - `tests/test_app.py`: its tests (covers route responses, session authentication, CSRF validation, form submissions, and income calculations).
 
