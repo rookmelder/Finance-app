@@ -3,7 +3,7 @@
 import datetime
 import email.utils
 
-from src import db, roster, roster_pdf
+from src import calc, db, roster, roster_pdf
 from src.gmail import GmailError
 from src.roster import NotARoster, RosterError
 from src.roster_pdf import PdfError
@@ -207,10 +207,20 @@ def sync(
             for d in result.get("days", [])
         ]
         all_stored = db.list_days(conn, month)
-        stored = [d for d in all_stored if not d["holiday"]]
+        # A rostered day is a holiday day when it is a Belgian public holiday or was already
+        # marked as a holiday by hand: the import must not turn it into a normal work day.
+        public = calc.belgian_holidays(int(month[:4]))
+        stored_holiday = {d["date"] for d in all_stored if d["holiday"]}
+        for d in wanted:
+            d["holiday"] = d["date"] in public or d["date"] in stored_holiday
+            if d["holiday"]:
+                # like a holiday set by hand: paid double, no shift code or times
+                d["code"] = d["start"] = d["end"] = None
+        wanted_dates_all = {d["date"] for d in wanted}
+        stored = [d for d in all_stored if not d["holiday"] or d["date"] in wanted_dates_all]
 
-        wanted_map = {d["date"]: (d["minutes"], d["code"], d["start"], d["end"]) for d in wanted}
-        stored_map = {d["date"]: (d["minutes"], d["code"], d["start"], d["end"]) for d in stored}
+        wanted_map = {d["date"]: (d["minutes"], d["code"], d["start"], d["end"], d["holiday"]) for d in wanted}
+        stored_map = {d["date"]: (d["minutes"], d["code"], d["start"], d["end"], bool(d["holiday"])) for d in stored}
 
         if wanted_map == stored_map:
             db.set_roster_import(conn, month, message_id, internal_date, today.isoformat() + "T00:00:00")
@@ -239,7 +249,7 @@ def sync(
                 {
                     "date": d["date"],
                     "minutes": d["minutes"],
-                    "holiday": False,
+                    "holiday": d["holiday"],
                     "code": d["code"],
                     "start": d["start"],
                     "end": d["end"],

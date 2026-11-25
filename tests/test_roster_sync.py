@@ -438,7 +438,7 @@ class TestRosterSync(unittest.TestCase):
         )
 
     def test_manual_holiday_kept_if_unused_and_replaced_if_roster_date(self):
-        """Holiday on an unused date is kept; holiday on a roster date is replaced by the worked day."""
+        """Holiday on an unused date is kept; a rostered holiday stays a holiday (no shift code)."""
         # Initial holidays in DB: 2026-12-15 and 2026-12-25
         db.save_month_days(self.conn, "2026-12", [
             {"date": "2026-12-15", "minutes": 450, "holiday": True},
@@ -478,15 +478,49 @@ class TestRosterSync(unittest.TestCase):
         self.assertIn("2026-12-15", days_by_date)
         self.assertTrue(days_by_date["2026-12-15"]["holiday"])
 
-        # 2026-12-25 was a holiday, but roster has work day -> now holiday=False, code=D
+        # 2026-12-25 was a holiday and is rostered: it stays a holiday, with the shift code D
         self.assertIn("2026-12-25", days_by_date)
-        self.assertFalse(days_by_date["2026-12-25"]["holiday"])
-        self.assertEqual(days_by_date["2026-12-25"]["code"], "D")
+        self.assertTrue(days_by_date["2026-12-25"]["holiday"])
+        self.assertIsNone(days_by_date["2026-12-25"]["code"])
 
         # 2026-12-26 is worked day
         self.assertIn("2026-12-26", days_by_date)
         self.assertFalse(days_by_date["2026-12-26"]["holiday"])
         self.assertEqual(days_by_date["2026-12-26"]["code"], "D")
+
+    def test_rostered_public_holiday_is_holiday_and_sync_is_idempotent(self):
+        """A rostered Belgian public holiday (not marked by hand) is imported as a holiday; a repeat sync changes nothing."""
+        gmail = FakeGmail(
+            messages={
+                "m1": {
+                    "id": "m1",
+                    "from": "planner@example.com",
+                    "subject": "Roster",
+                    "internal_date": 1000,
+                    "attachments": [{"filename": "roster.pdf", "mime_type": "application/pdf", "attachment_id": "a1"}],
+                }
+            },
+            attachments={("m1", "a1"): b"%PDF-data"},
+        )
+
+        def fake_parse(tokens, name):
+            return {
+                "month": "2026-12",
+                "days": [
+                    {"date": "2026-12-25", "minutes": 450, "code": "D", "start": 510, "end": 990},
+                    {"date": "2026-12-28", "minutes": 450, "code": "D", "start": 510, "end": 990},
+                ],
+                "legend": {"D": {"start": 510, "end": 990, "minutes": 450}},
+            }
+
+        sync(self.conn, gmail, self.today, extract_tokens=lambda d: ["tok"], parse=fake_parse)
+        by_date = {d["date"]: d for d in db.list_days(self.conn, "2026-12")}
+        self.assertTrue(by_date["2026-12-25"]["holiday"])
+        self.assertIsNone(by_date["2026-12-25"]["code"])
+        self.assertFalse(by_date["2026-12-28"]["holiday"])
+
+        res = sync(self.conn, gmail, self.today, extract_tokens=lambda d: ["tok"], parse=fake_parse)
+        self.assertEqual([m["status"] for m in res["months"]], ["unchanged"])
 
     def test_legend_shifts_added_without_overwriting_edited_shift(self):
         """Shifts from legend are added to db, but existing edited shifts are never overwritten."""
