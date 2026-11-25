@@ -331,7 +331,36 @@
     return frag;
   }
 
+  // Collapsible tools bar: closed by default, remembers its state.
+  const toolsToggle = document.getElementById("tools-toggle");
+  const toolsBody = document.getElementById("tools-body");
+  const toolsActive = document.getElementById("tools-active");
+  function setToolsOpen(open) {
+    if (!toolsToggle || !toolsBody) return;
+    toolsBody.hidden = !open;
+    toolsToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    toolsToggle.classList.toggle("is-open", open);
+    try { localStorage.setItem("calToolsOpen", open ? "1" : "0"); } catch (err) { /* ignore */ }
+  }
+  if (toolsToggle) {
+    let saved = null;
+    try { saved = localStorage.getItem("calToolsOpen"); } catch (err) { /* ignore */ }
+    setToolsOpen(saved === "1");
+    toolsToggle.addEventListener("click", () => setToolsOpen(toolsBody.hidden));
+  }
+
+  function activeToolLabel() {
+    const t = state.activeTool;
+    if (!t) return "none picked";
+    if (t.type === "preset") return t.preset.label;
+    if (t.type === "shift") return t.shift.code;
+    if (t.type === "custom") return formatHours(t.minutes) + "h";
+    if (t.type === "erase") return "Erase";
+    return "";
+  }
+
   function updatePresetsBarActiveStates() {
+    if (toolsActive) toolsActive.textContent = activeToolLabel();
     if (!presetsContainer) return;
     const buttons = presetsContainer.querySelectorAll("button");
     for (const btn of buttons) {

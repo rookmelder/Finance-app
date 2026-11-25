@@ -24,8 +24,15 @@
 <script type="application/json" id="cal-data">{{ cal | tojson }}</script>
 
 <div class="cal-toolbar">
+  <button type="button" id="tools-toggle" class="tools-toggle" aria-expanded="false" aria-controls="tools-body">
+    <span class="tools-toggle-title">Day tools</span>
+    <span id="tools-active" class="tools-active">none picked</span>
+    <span class="tools-caret" aria-hidden="true">▾</span>
+  </button>
+  <div id="tools-body" class="tools-body" hidden>
   <div id="presets" class="presets" role="toolbar" aria-label="Day tools"></div>
   <p class="cal-hint">Pick a tool, then tap the days you worked, or drag a tool onto a day. Tap a day's hours (or any day with no tool picked) to set custom hours for that day.</p>
+  </div>
 </div>
 
 <div class="cal-layout">

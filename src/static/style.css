@@ -871,6 +871,28 @@ body.login button[type="submit"] { width: 100%; margin-top: 4px; }
   -webkit-backdrop-filter: blur(10px);
 }
 
+.tools-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+.tools-active { color: var(--muted); font-weight: 600; margin-left: auto; }
+.tools-caret { transition: transform 0.15s; }
+.tools-toggle.is-open .tools-caret { transform: rotate(180deg); }
+.tools-body[hidden] { display: none; }
+.tools-body { margin-top: 8px; }
+
 .presets {
   display: flex;
   flex-wrap: wrap;
